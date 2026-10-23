@@ -1,0 +1,1 @@
+.demo-toolbar{position:relative;z-index:10000;display:flex;gap:20px;align-items:center;justify-content:center;flex-wrap:wrap;padding:10px;background:#e4ede6;color:#24372c;font:13px system-ui}.demo-toolbar label{display:flex;gap:8px}.demo-toolbar select{border:1px solid #829887;border-radius:4px;padding:2px;background:white;color:#182230}

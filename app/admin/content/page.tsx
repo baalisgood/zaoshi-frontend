@@ -1,0 +1,13 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+
+type Summary = { expiringAssets: number; expiringGallery: number; pendingCleanup: number; retryCleanup: number; blockedCleanup: number };
+export default function AdminContentPage() {
+  const [summary, setSummary] = useState<Summary>(); const [message, setMessage] = useState(""); const [working, setWorking] = useState(false);
+  const load = useCallback(async () => { const response = await fetch("/api/admin/assets/lifecycle", { cache: "no-store" }); const body = await response.json() as { summary?: Summary; error?: { message?: string } }; if (!response.ok || !body.summary) throw new Error(body.error?.message ?? "资产策略状态读取失败。"); setSummary(body.summary); }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- Initial remote state belongs in this client-only admin view.
+  useEffect(() => { void load().catch((error) => setMessage(error instanceof Error ? error.message : "资产策略状态读取失败。")); }, [load]);
+  async function run() { setWorking(true); setMessage(""); try { const response = await fetch("/api/admin/assets/lifecycle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retryBlocked", actionId: crypto.randomUUID() }) }); const body = await response.json() as { summary?: Summary; error?: { message?: string } }; if (!response.ok || !body.summary) throw new Error(body.error?.message ?? "资产维护失败。"); setSummary(body.summary); setMessage("阻塞项已提交重试。"); } catch (error) { setMessage(error instanceof Error ? error.message : "资产维护失败。"); } finally { setWorking(false); } }
+  return <section className="admin-page"><header className="admin-page-head"><div><span className="section-kicker">ASSET RETENTION</span><h1>图片保留与清理</h1><p>图片到期扫描、文件清理和分析数据清理由后台定时维护；这里只保留有审计记录的阻塞项重试。</p></div></header>{message && <p className="admin-notice" role="status">{message}</p>}<div className="admin-metrics"><article><span>已到期用户图片</span><strong>{summary?.expiringAssets ?? "—"}</strong></article><article><span>已到期展示图</span><strong>{summary?.expiringGallery ?? "—"}</strong></article><article><span>待删除文件</span><strong>{summary?.pendingCleanup ?? "—"}</strong></article><article><span>等待重试</span><strong>{summary?.retryCleanup ?? "—"}</strong></article><article><span>清理阻塞</span><strong>{summary?.blockedCleanup ?? "—"}</strong></article></div><div className="admin-filters"><button type="button" disabled={working || !summary?.blockedCleanup} onClick={() => void run()}>重试阻塞项</button></div><div className="admin-notice"><strong>策略边界</strong><p>灵感库只允许开发者维护，用户没有投稿入口。供应商明确拒绝违规输入时任务失败；网络、超时或未知错误仍按可靠队列规则处理。</p></div></section>;
+}

@@ -1,0 +1,1 @@
+import type {ImgHTMLAttributes} from "react";type Props=ImgHTMLAttributes<HTMLImageElement>&{fill?:boolean;priority?:boolean;unoptimized?:boolean};export default function Image({fill,priority,unoptimized,...props}:Props){return <img {...props} style={{...(fill?{position:"absolute",inset:0,width:"100%",height:"100%"}:{}),...props.style}}/>;}
