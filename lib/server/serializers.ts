@@ -1,4 +1,5 @@
 import type { PersistedAsset, PersistedJob } from "./persistence";
+import { isBareShellInstruction } from "@/lib/domain/bare-shell";
 import { parseAdditionalReferencesJson, safeParseAdvancedSettingsJson } from "./job-contract";
 
 export function serializeAsset(asset: PersistedAsset) {
@@ -32,6 +33,7 @@ export function serializeJob(job: (Omit<PersistedJob, "advancedSettingsJson" | "
       (assetId): assetId is string => Boolean(assetId),
     ),
     workflowType: job.workflowType,
+    ...(job.workflowType === "advanced" && isBareShellInstruction(job.editInstruction) ? { taskMode: "bare-shell" as const } : {}),
     purpose: job.purpose ?? "final",
     sourceJobId: job.sourceJobId ?? null,
     promotedFromAssetId: job.promotedFromAssetId ?? null,

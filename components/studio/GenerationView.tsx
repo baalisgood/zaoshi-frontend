@@ -37,6 +37,7 @@ export function GenerationView({ controller, onLocalEdit, resolution = "2K", qua
   }
 
   const mock = job.provider === "mock";
+  const bareShell = job.taskMode === "bare-shell";
   return (
     <section aria-live="polite">
       {controller.finalizeError && job.purpose === "preview" && <p role="alert" className="summary-note error-text">{controller.finalizeError} 参考图仍可再次尝试。</p>}
@@ -44,14 +45,14 @@ export function GenerationView({ controller, onLocalEdit, resolution = "2K", qua
       {privateTest && job.purpose === "preview" && <p className="summary-note" role="note">私测暂不支持参考图直接晋升成品图；可在工作台重新提交单张成品任务。</p>}
       <div className={`result-notice ${job.status === "PARTIAL_SUCCEEDED" ? "partial" : ""} ${mock ? "mock" : ""}`}>
         <span aria-hidden="true">{job.status === "PARTIAL_SUCCEEDED" ? "!" : "✓"}</span>
-        <div><strong>{mock ? "Mock接口测试结果" : job.status === "PARTIAL_SUCCEEDED" ? "部分结果已返回" : "概念效果图已返回"}</strong><p>{mock ? "以下图片只是原图占位，没有调用图像模型，也不代表生成质量。" : `${job.results.length} 张结果已通过文件检查；空间结构与设计合理性仍需人工复核。`}</p></div>
+        <div><strong>{mock ? "Mock接口测试结果" : job.status === "PARTIAL_SUCCEEDED" ? "部分结果已返回" : bareShell ? "毛坯结构图已返回" : "概念效果图已返回"}</strong><p>{mock ? "以下图片只是原图占位，没有调用图像模型，也不代表生成质量。" : bareShell ? `${job.results.length} 张毛坯结构图已通过文件检查；请对照原图确认墙体、门窗和梁柱没有跑偏；结果可在下方任务列表下载。` : `${job.results.length} 张结果已通过文件检查；空间结构与设计合理性仍需人工复核。`}</p></div>
       </div>
       <div className="generated-grid">
         {job.results.map((result, index) => {
           const reusable = mock || result.moderationStatus !== "REJECTED";
           return <article className="generated-card" key={result.assetId}>
-            <div className="generated-image">{result.url ? <img src={result.url} alt={`概念效果图 ${index + 1}`} /> : <span>结果地址暂不可用</span>}{mock && <b>MOCK · 原图占位</b>}</div>
-            <div className="generated-actions"><div><strong>方案 {String(index + 1).padStart(2, "0")}</strong><small>{job.model ?? job.provider ?? "图像服务"}</small></div>{reusable ? <span className="action-row"><a href={`/pro?asset=${encodeURIComponent(result.assetId)}`}>高级精修</a>{job.purpose === "preview" && !mock && privateTest === false && <button type="button" disabled={controller.busy || !finalizePricing.quote} onClick={() => { const quote = finalizePricing.quote; if (!quote) return; void controller.finalize({ selectedOutputAssetId: result.assetId, resolution, quality, outputCount: 1, expectedPriceVersion: quote.priceVersion, expectedTotalCredits: quote.totalCredits, idempotencyKey: `finalize:${job.id}:${result.assetId}:${resolution}:${quality}` }); }}>生成高清成品 · {finalizePricing.quote ? `${finalizePricing.quote.totalCredits}积分` : "报价中"}</button>}{onLocalEdit && !mock && <button type="button" onClick={() => onLocalEdit(result.assetId, result.url)}>局部修改</button>}</span> : <small>图片不可继续使用。</small>}</div>
+            <div className="generated-image">{result.url ? <img src={result.url} alt={`${bareShell ? "毛坯结构图" : "概念效果图"} ${index + 1}`} /> : <span>结果地址暂不可用</span>}{mock && <b>MOCK · 原图占位</b>}</div>
+            <div className="generated-actions"><div><strong>{bareShell ? "毛坯结构图" : "方案"} {String(index + 1).padStart(2, "0")}</strong><small>{job.model ?? job.provider ?? "图像服务"}</small></div>{bareShell ? <small>请在下方任务列表下载。</small> : reusable ? <span className="action-row"><a href={`/pro?asset=${encodeURIComponent(result.assetId)}`}>高级精修</a>{job.purpose === "preview" && !mock && privateTest === false && <button type="button" disabled={controller.busy || !finalizePricing.quote} onClick={() => { const quote = finalizePricing.quote; if (!quote) return; void controller.finalize({ selectedOutputAssetId: result.assetId, resolution, quality, outputCount: 1, expectedPriceVersion: quote.priceVersion, expectedTotalCredits: quote.totalCredits, idempotencyKey: `finalize:${job.id}:${result.assetId}:${resolution}:${quality}` }); }}>生成高清成品 · {finalizePricing.quote ? `${finalizePricing.quote.totalCredits}积分` : "报价中"}</button>}{onLocalEdit && !mock && <button type="button" onClick={() => onLocalEdit(result.assetId, result.url)}>局部修改</button>}</span> : <small>图片不可继续使用。</small>}</div>
           </article>;
         })}
       </div>

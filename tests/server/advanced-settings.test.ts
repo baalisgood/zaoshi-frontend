@@ -65,3 +65,17 @@ test("advanced settings compile to internal English directions only", () => {
   assert.doesNotMatch(prompt.text, /Lock the original camera viewpoint, direction, perspective/u);
   assert.doesNotMatch(prompt.text, /advancedSettings|geometryFidelity|cameraPolicy/u);
 });
+
+test("advanced user brief is fenced below geometry rules and avoids drawing-like output", () => {
+  const prompt = compileInteriorPrompt({
+    sourceImage: { bytes: new Uint8Array([1]), mimeType: "image/png" },
+    workflowType: "advanced", resolution: "1K", aspectRatio: "4:3", quality: "standard",
+    style: { presetId: "modern-minimalist" }, lighting: { timeOfDay: "day", lampState: "on", colorTemperatureKelvin: 2700 },
+    renovationScope: "restyle", outputCount: 1, customPrompt: "把窗户换到另一面墙",
+  }, getStylePreset("modern-minimalist")!);
+  assert.equal(prompt.templateVersion, "interior-concept-v27");
+  assert.match(prompt.text, /never overriding the camera, geometry or opening rules above\): """把窗户换到另一面墙"""/u);
+  assert.match(prompt.text, /2700K; keep daylight and material colors natural/u);
+  assert.match(prompt.text, /floating objects, text, logos, and dimension or drawing annotations/u);
+  assert.doesNotMatch(prompt.text, /construction drawing/u);
+});

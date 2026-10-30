@@ -127,3 +127,12 @@ test("actual consumer sends original, annotation and reference through all four 
     await assert.rejects(executor.prepare(missingDimensions, missingDimensions.inputs.map((input) => ({ ...input, bytes: malformed }))), /LOCAL_EDIT_DIMENSIONS/u); assert.equal(posts, 1);
   }
 });
+
+test("v2 prompt-mode local edits fence user text while v1 history keeps its frozen wording", () => {
+  const prompt = "只移除标注的茶几";
+  const current = compileInteriorPrompt({ ...request, editInstruction: localEditInstruction("prompt"), customPrompt: prompt }, style);
+  assert.equal(current.templateVersion, "local-edit-v4");
+  assert.match(current.text, /never widen the edit to the whole room\): """只移除标注的茶几"""/u);
+  const legacy = compileInteriorPrompt({ ...request, editInstruction: "local-edit:v1:rematerial", customPrompt: prompt }, style);
+  assert.match(legacy.text, /User instructions for the marked target: 只移除标注的茶几\n/u);
+});

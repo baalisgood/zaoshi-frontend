@@ -2,6 +2,7 @@
 
 import { loadSession } from "@/components/site/session";
 import { localEditOptions, parseLocalEditInstruction, localEditUsesPrompt } from "@/lib/domain/local-edit";
+import { isBareShellInstruction } from "@/lib/domain/bare-shell";
 import type { UploadedImage } from "@/components/studio/StudioFields";
 import { AssetUploadError, deleteAsset, GenerationSubmissionError, submitGeneration, uploadAsset, type JobSnapshot } from "@/components/site/api";
 import { imageModelCapabilities, normalizeImageModel } from "@/lib/domain/image-models";
@@ -190,6 +191,8 @@ export function providerInputCount(payload: Record<string, unknown>): number {
 
 export function submittedParameterSummary(payload: Record<string, unknown>): string {
   const labels: Record<string, string> = { spaceType: "空间类型", stylePresetId: "风格编号", designSchemeId: "设计方案", lightingPreset: "光照时段", lampState: "灯具状态", preservationMode: "保留策略", visualRealism: "视觉表现", colorTemperatureKelvin: "色温", aspectRatio: "画面比例", quality: "质量", advancedSettings: "高级设置", customPrompt: "自定义提示词", editInstruction: "局部修改说明" };
+  // 毛坯还原 ignores every design parameter; list only what actually reaches the model.
+  if (isBareShellInstruction(payload.editInstruction)) return ["生成内容：毛坯还原", ...["aspectRatio", "quality"].flatMap((key) => payload[key] ? [`${labels[key]}：${String(payload[key])}`] : [])].join("\n");
   const operation = parseLocalEditInstruction(payload.editInstruction);
   const local = operation && Array.isArray(payload.additionalReferences) && payload.additionalReferences.some((entry) => entry?.role === "selection");
   const fields = Object.entries(labels).flatMap(([key, label]) => {

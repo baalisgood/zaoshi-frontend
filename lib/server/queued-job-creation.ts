@@ -1,3 +1,4 @@
+import { userEditInstruction } from "@/lib/domain/bare-shell";
 import { createHash } from "node:crypto";
 
 import {
@@ -115,7 +116,7 @@ export async function createD1QueuedJobIdempotently(
   const admissionId = `quota_${record.id}`;
   if (policy.requireMachineModeration && !/^tencent-20261006-v1:[a-f0-9]{16}$/.test(policy.moderationPolicyVersion ?? "")) throw new ApiError(503,"MODERATION_UNAVAILABLE","内容检查服务暂不可用。");
   const auditInputs = [record.sourceAssetId,record.referenceAssetId,record.maskAssetId,record.depthAssetId,record.normalAssetId,...(JSON.parse(record.additionalReferencesJson) as {assetId:string}[]).map(entry=>entry.assetId)].filter(Boolean);
-  const customText = [record.customPrompt,record.editInstruction].filter(Boolean).join("\n");
+  const customText = [record.customPrompt,userEditInstruction(record.editInstruction)].filter(Boolean).join("\n");
   const textSha = customText.trim() ? createHash("sha256").update(customText).digest("hex") : "";
   const insertAdmission = d1.prepare(
     `INSERT INTO generation_quota_admissions

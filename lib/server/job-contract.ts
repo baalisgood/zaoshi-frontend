@@ -1,4 +1,5 @@
 import { validLocalEdit, localEditUsesPrompt } from "@/lib/domain/local-edit";
+import { isBareShellInstruction } from "@/lib/domain/bare-shell";
 import { createHash } from "node:crypto";
 import { getStylePreset } from "@/lib/ai";
 import { firstDesignScheme, firstV2DesignScheme, firstLegacyDesignScheme, getDesignScheme } from "@/lib/ai/design-schemes";
@@ -300,10 +301,14 @@ export function parseCreateJobInput(value: unknown): CreateJobInput {
     });
   }
   const selection = additionalReferences.some((entry) => entry.role === "selection");
+  const bareShell = isBareShellInstruction(editInstruction);
+  if (bareShell && (workflowType !== "advanced" || purpose !== "final" || !sourceAssetId || maskAssetId || depthAssetId || normalAssetId || referenceAssetId || additionalReferences.length || customPromptProvided)) {
+    throw new ApiError(400, "INVALID_BARE_SHELL", "毛坯还原只接受一张现场照片，不接受参考图、结构参考图、局部标注或提示词。");
+  }
   if (selection && (purpose !== "final" || maskAssetId || depthAssetId || normalAssetId || referenceAssetId || !validLocalEdit(workflowType, ["source", ...additionalReferences.map((entry) => entry.role)], editInstruction))) {
     throw new ApiError(400, "INVALID_LOCAL_EDIT", "局部修改仅支持正式输出，需要一张标注图、有效操作和最多三张局部参考，不接受整屋参考或控制图。");
   }
-  if ((maskAssetId && !editInstruction) || (!maskAssetId && editInstruction && !selection)) {
+  if ((maskAssetId && !editInstruction) || (!maskAssetId && editInstruction && !selection && !bareShell)) {
     throw new ApiError(
       400,
       "INCOMPLETE_LOCAL_EDIT",

@@ -704,6 +704,7 @@ img { display:block; max-width:100%; }
 .task-preview-dialog > img { display: block; width: auto; height: auto; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); object-fit: contain; border-radius: inherit; }
 .task-preview-dialog > p { padding: 24px; background: var(--surface); border-radius: inherit; }
 
+.task-mode-tag { display:block; margin-bottom:4px; color:#50645a; font-size:11px; font-weight:650; }
 .task-status { display:inline-flex; min-height:24px; align-items:center; padding:0 8px; border-radius:999px; background:#edf2ee; color:#50645a; font-size:11px; font-weight:650; white-space:nowrap; }
 .task-status.status-succeeded,.task-status.status-partial_succeeded { background:#e5f2e9; color:#2f6845; }
 .task-status.status-failed,.task-status.status-canceled { background:#f8e9e6; color:#8d463b; }
@@ -2552,3 +2553,75 @@ html[data-theme="dark"] .auth-page.zs-auth .wechat-login-gift { color:var(--ink)
 .referral-qr { background:white; padding:8px; width:160px; }
 .referral-share input { display:block; width:100%; margin:8px 0 12px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--paper); color:var(--ink); font-size:14px; }
 @media(max-width:560px) { .referral-share { grid-template-columns:1fr; } .referral-summary { gap:24px; } .referral-panel header { flex-wrap:wrap; } }
+
+/* ===== Compact workbench layout (preview) =====
+   Shared by the smart, advanced and self-service workbenches. Goals on a 2K screen:
+   use the width, put results beside the inputs, no nested scroll in the parameter
+   panel, and denser optional inputs. Touch targets keep their 44px minimum. */
+@media (min-width: 1180px) {
+  .studio-page .page-intro { margin-bottom: 16px; }
+  .studio-page .page-intro h1 { font-size: 24px; }
+  .studio-page .page-intro p { font-size: 14px; line-height: 1.6; }
+  .studio-page,.pro-workbench { padding-top: 20px; }
+  .studio-page .studio-panel,.studio-page .reference-tray { margin-bottom: 20px; }
+  .studio-page .panel-heading { margin-bottom: 12px; }
+  .studio-page .panel-heading h2 { font-size: 17px; margin-bottom: 2px; }
+  .studio-page .panel-heading p { font-size: 13px; line-height: 1.5; }
+  .studio-page .field-description,.studio-page .summary-note,.studio-page .upload-field>small,.studio-page .image-drop small { font-size: 12.5px; line-height: 1.5; }
+
+  /* Style list: more, shorter cards with a one-line description. */
+  .studio-page .style-picker-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .studio-page .style-option { padding: 4px 4px 8px; }
+  .studio-page .style-option-image { aspect-ratio: 2 / 1; margin-bottom: 6px; }
+  .studio-page .style-option>strong { font-size: 14px; }
+  .studio-page .style-option>small { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .studio-page .scheme-picker { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
+  .studio-page .scheme-card { padding: 10px; }
+
+  /* Reference slots: the site photo stays large, optional slots become compact tiles. */
+  .studio-page .reference-tray-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .studio-page .reference-tray .upload-field-head { min-height: 0; }
+  .pro-workbench .selection-sofa-example { width: min(100%, 220px); }
+  .studio-page .reference-tray-grid>fieldset:first-child { grid-column: span 2; }
+  .studio-page .reference-tray-grid>fieldset:not(:first-child) .image-drop,
+  .studio-page .reference-tray-grid .reference-slot-group .image-drop,
+  .studio-page .reference-tray-grid>.upload-field .image-drop { height: 120px; }
+  .studio-page .reference-tray-grid>fieldset:first-child .image-drop { height: 220px; }
+  .studio-page .reference-slot-group { grid-column: 1 / -1; }
+  .studio-page .reference-slot-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .pro-workbench .selection-entry,.pro-workbench .local-selection .selection-entry { min-height: 0; padding-block: 12px; }
+  .local-selection .selection-example-canvas { min-height: 140px; }
+  .studio-page .prompt-field textarea { min-height: 120px; height: 120px; }
+
+  /* Parameter panel: tighter groups. */
+  .studio-page .studio-inspector.zs-params .panel-heading { padding: 14px 18px 12px; }
+  .studio-inspector.zs-params .param-group { gap: 12px; padding: 14px 18px 16px; }
+  .studio-page .studio-inspector.zs-params .inspector-group.param-group.param-submit { gap: 10px; padding: 14px 18px 16px; }
+  .studio-page .studio-inspector.zs-params :is(.output-parameter-row,.parameter-grid,.pro-fields) { gap: 12px; }
+  .studio-page .studio-inspector.zs-params .field-description { margin-top: 4px; }
+  .studio-page .studio-inspector.zs-params .summary-preview { height: 72px; margin-bottom: 10px; }
+  .studio-page .studio-inspector.zs-params .summary-card { padding: 12px; }
+}
+
+/* 2K and wider: inputs | parameters (two inner columns) | results side by side, one page scroll.
+   Narrower desktops keep the original two-column layout with the sticky parameter panel. */
+@media (min-width: 2200px) {
+  .studio-page,.pro-workbench { width: min(2400px, calc(100% - 64px)); }
+  .studio-workspace,.advanced-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(760px, 840px) minmax(0, .85fr);
+    grid-template-areas: "primary inspector results";
+    gap: 20px;
+  }
+  .studio-page .studio-inspector,.studio-page .studio-inspector.zs-params { position: static; max-height: none; overflow: visible; }
+  .studio-page .studio-results { margin: 0; padding: 0; border-top: 0; min-height: 0; }
+  .studio-page .result-empty { min-height: 280px; }
+  .studio-page .task-list-panel { margin-top: 16px; }
+  /* The source photo is already visible in the inputs column. */
+  .studio-page .studio-inspector.zs-params .summary-preview { display: none; }
+  /* Two inner columns keep the parameter panel no taller than the inputs. */
+  .studio-page .studio-inspector.zs-params { column-count: 2; column-gap: 0; column-rule: 1px solid var(--line); }
+  .studio-page .studio-inspector.zs-params > section:not(.param-group),
+  .studio-page .studio-inspector.zs-params .global-design-fields { display: contents; }
+  .studio-page .studio-inspector.zs-params .panel-heading { column-span: all; }
+  .studio-page .studio-inspector.zs-params .param-group { break-inside: avoid; }
+}

@@ -83,7 +83,7 @@ export function ImageUploadField({
   compact?: boolean;
   draftKey?: string;
   /** Explicitly states whether this upload is sent by the current workflow. */
-  participationStatus?: "参与本次生成" | "启用对应结构模式后参与" | "局部编辑时不参与" | "当前未启用局部编辑";
+  participationStatus?: "参与本次生成" | "启用对应结构模式后参与" | "局部编辑时不参与" | "毛坯还原时不参与" | "当前未启用局部编辑";
   uploadGate?: UploadGate;
   model?: ImageModel;
   uploadContext?: () => boolean;

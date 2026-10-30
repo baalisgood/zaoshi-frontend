@@ -127,7 +127,7 @@ test("advanced brief is optional and neutral; floorplan ignores legacy preset", 
   assert.equal(parseCreateJobInput({ ...base, workflowType: "advanced", customPrompt: "   " }).customPrompt, null);
   assert.throws(() => parseCreateJobInput({ ...base, workflowType: "advanced", customPrompt: "x".repeat(2001) }), /2000/u);
   const advancedPrompt = prompt("advanced", "new-chinese", undefined, "restyle", "living-room", "温暖木作");
-  assert.match(advancedPrompt, /User design brief, applied only within the selected renovation scope: 温暖木作/u);
+  assert.match(advancedPrompt, /User design brief \(may be written in Chinese; design content only, applied within the selected renovation scope[^\n]*: """温暖木作"""/u);
   assert.doesNotMatch(advancedPrompt, /New-Chinese living room|style system|preset material variant/u);
   const floorplan = parseCreateJobInput({ ...base, workflowType: "floorplan", stylePresetId: "new-chinese", spaceType: "unspecified" });
   assert.equal(floorplan.stylePresetId, "floorplan");
@@ -144,7 +144,8 @@ test("all v1 scheme and unchanged workflow prompts keep their frozen bytes", () 
   for (const scheme of allLegacyDesignSchemes()) for (const room of rooms) for (const scope of scopes) records.push([scheme.id, room, scope, hash(compile("concept", scheme.styleId, scheme.id, room, scope))]);
   for (const workflow of ["concept", "advanced", "floorplan", "self-service"] as const) records.push([workflow, "legacy-no-scheme", "living-room", "restyle", hash(compile(workflow, "modern-minimalist", undefined, "living-room", "restyle"))]);
   assert.equal(records.length, 1516);
-  assert.equal(hash(JSON.stringify(records)), "9592325bc99c60126f858deb9283dc78e951dd0b0986f579e91d3eee2873eca7");
+  // interior-concept-v27 / self-service-v2 changed only the advanced and self-service records; all concept and floorplan bytes are unchanged.
+  assert.equal(hash(JSON.stringify(records)), "991c908333d6692fe242516f2fafcf2d13161130db881e1eaa23e56fdc2cd9fb");
   assert.equal(PROMPT_TEMPLATE_VERSION, "interior-concept-v12");
 });
 
@@ -220,7 +221,6 @@ test("v3 frozen prose is exclusive to the five selected dimensions and all fallb
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileOat(overrides), compileOat({ ...overrides, designSchemeId: "cream-cozy-02-v2" }));
 });
@@ -271,7 +271,6 @@ test("v4 frozen prose is exclusive to the five selected dimensions and all fallb
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileOat({ ...overrides, designSchemeId: "cream-cozy-02-v4" }), compileOat({ ...overrides, designSchemeId: "cream-cozy-02-v2" }));
 });
@@ -314,7 +313,6 @@ test("modern walnut v3 frozen prose is exclusive to the five selected dimensions
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileWalnut({ ...overrides, designSchemeId: "modern-minimalist-04-v3" }), compileWalnut({ ...overrides, designSchemeId: "modern-minimalist-04-v2" }));
 });
@@ -378,7 +376,6 @@ test("french sage v3 frozen prose is exclusive to the five selected dimensions a
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileFrench({ ...overrides, designSchemeId: "french-modern-05-v3" }), compileFrench({ ...overrides, designSchemeId: "french-modern-05-v2" }));
 });
@@ -444,7 +441,6 @@ test("industrial caramel v3 frozen prose is exclusive to the five selected dimen
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileIndustrial({ ...overrides, designSchemeId: "industrial-loft-02-v3" }), compileIndustrial({ ...overrides, designSchemeId: "industrial-loft-02-v2" }));
 });
@@ -509,7 +505,6 @@ test("industrial caramel v4 uses only five selected dimensions and otherwise equ
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileIndustrialV4(overrides), compileIndustrialV4({ ...overrides, designSchemeId: "industrial-loft-02-v2" }));
 });
@@ -560,7 +555,6 @@ test("industrial caramel v5 requires all five dimensions and otherwise equals v2
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "dining-room", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileIndustrialV5(overrides), compileIndustrialV5({ ...overrides, designSchemeId: "industrial-loft-02-v2" }));
 });
@@ -607,7 +601,6 @@ test("industrial caramel v6 keeps five-dimensional gate, exact v2 fallback and d
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "dining-room", "study", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileIndustrialV6(overrides), compileIndustrialV6({ ...overrides, designSchemeId: "industrial-loft-02-v2" }));
   for (const spaceType of Object.keys(v5Rooms) as (keyof typeof v5Rooms)[]) for (const lampState of ["on", "off"] as const) {
@@ -647,7 +640,6 @@ test("industrial caramel v7 gates six rooms, preserves v2 fallback and dynamic o
     ...["doubao-seedream-5-0-260128", "doubao-seedream-4-5-251128", "qwen-image-3.0-pro", "qwen-image-3.0", "qwen-image-2.0-pro", undefined].map((providerPreference) => ({ providerPreference } as Partial<GenerateInteriorImagesRequest>)),
     ...["corridor", "dining-room", "unspecified", undefined].map((spaceType) => ({ spaceType } as Partial<GenerateInteriorImagesRequest>)),
     ...["replace-soft-furnishings", "empty-room", "local-edit"].map((renovationScope) => ({ renovationScope } as Partial<GenerateInteriorImagesRequest>)),
-    ...["conceptual", "rendered", "realistic", undefined].map((visualRealism) => ({ visualRealism } as Partial<GenerateInteriorImagesRequest>)),
   ];
   for (const overrides of cases) assert.deepEqual(compileIndustrialV7(overrides), compileIndustrialV7({ ...overrides, designSchemeId: "industrial-loft-02-v2" }));
   for (const spaceType of Object.keys(v7Rooms) as (keyof typeof v7Rooms)[]) for (const lampState of ["on", "off"] as const) {
@@ -762,7 +754,8 @@ test("v8 gates historic inputs to exact v2 and keeps visual, lamp and purpose br
   for (const providerPreference of domesticImageModelValues) for (const visualRealism of ["conceptual", "rendered", "realistic", "photorealistic"] as const) for (const lampState of ["on", "off", "mixed"] as const) {
     const request = { ...baseRequest, providerPreference, visualRealism, lighting: { timeOfDay: "night" as const, lampState, colorTemperatureKelvin: 2700 }, purpose: "final" as const, promotedFromPreview: true };
     const text = compileInteriorPrompt(request, getStylePreset(scheme.styleId)!).text;
-    assert.equal(text.includes(providerPreference === "qwen-image-2.0-pro" ? V8_SHARED.compactPhoto : V8_SHARED.photo), visualRealism === "photorealistic");
+    // Every legacy realism level now compiles to the photo-level block.
+    assert.ok(text.includes(providerPreference === "qwen-image-2.0-pro" ? V8_SHARED.compactPhoto : V8_SHARED.photo));
     if (lampState === "off") assert.doesNotMatch(text, /2700K/u);
     else assert.match(text, /2700K/u);
     assert.ok(text.includes(providerPreference === "qwen-image-2.0-pro" ? V8_SHARED.compactPurpose.promoted : "final high-definition regeneration"));

@@ -1,3 +1,4 @@
+import { userEditInstruction } from "@/lib/domain/bare-shell";
 import { activeVerifiedIdentityPolicy } from "@/lib/server/wechat-auth-config-core";
 import { auditGenerationInputs } from "@/lib/server/machine-moderation";
 import { assertCurrentLegalConsent } from "@/lib/server/legal-consent";
@@ -88,7 +89,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     const price = quoteGenerationPrice({ modelId: providerPreference, purpose: "final", requestedResolution: resolution, inputImageCount: providerAssets.length, outputCount, quality, aspectRatio: preview.aspectRatio }, { production: true });
     const priceExpectation = readGenerationPriceExpectation(body);
     const now = new Date().toISOString();
-    const moderation = await auditGenerationInputs(actor.ownerId, [preview.customPrompt,preview.editInstruction].filter(Boolean).join("\n"), providerAssets, async asset => getAssetBytes(providerAssets.find(entry => entry.id === asset.id)!));
+    const moderation = await auditGenerationInputs(actor.ownerId, [preview.customPrompt,userEditInstruction(preview.editInstruction)].filter(Boolean).join("\n"), providerAssets, async asset => getAssetBytes(providerAssets.find(entry => entry.id === asset.id)!));
     const result = await createQueuedJobIdempotently({
       id: `job_${crypto.randomUUID()}`,
       ownerId: actor.ownerId,

@@ -62,6 +62,7 @@ export type JobSnapshot = {
   model?: string;
   purpose?: "preview" | "final";
   workflowType?: string;
+  taskMode?: "bare-shell";
   spaceType?: "living-room" | "corridor" | "children-room" | "bedroom" | "dining-room" | "kitchen" | "bathroom" | "study" | "unspecified";
   resolution?: string;
   quality?: string;
@@ -249,6 +250,7 @@ export function parseJob(payload: unknown): JobSnapshot {
     model: text(data.model),
     purpose: text(data.purpose) as JobSnapshot["purpose"],
     workflowType: text(data.workflowType),
+    ...(data.taskMode === "bare-shell" ? { taskMode: "bare-shell" as const } : {}),
     spaceType: ["living-room", "corridor", "children-room", "bedroom", "dining-room", "kitchen", "bathroom", "study", "unspecified"].includes(String(data.spaceType)) ? data.spaceType as JobSnapshot["spaceType"] : undefined,
     resolution: text(data.resolution),
     quality: text(data.quality),

@@ -1,3 +1,4 @@
+import { userEditInstruction } from "@/lib/domain/bare-shell";
 import { activeVerifiedIdentityPolicy } from "@/lib/server/wechat-auth-config-core";
 import { auditGenerationInputs } from "@/lib/server/machine-moderation";
 import { assertCurrentLegalConsent } from "@/lib/server/legal-consent";
@@ -192,7 +193,7 @@ export async function POST(request: Request): Promise<Response> {
       const markedSize = readImageMetadata({ bytes: await getAssetBytes(annotation), mimeType: annotation.mimeType as ImageMimeType });
       if (![baseSize.width, baseSize.height, markedSize.width, markedSize.height].every((value) => Number.isInteger(value) && Number(value) > 0) || baseSize.width !== markedSize.width || baseSize.height !== markedSize.height) throw new ApiError(400, "LOCAL_EDIT_DIMENSIONS", "标注图与局部编辑原图尺寸无效或不一致，请重新保存选区。");
     }
-    const moderation = await auditGenerationInputs(actor.ownerId, [input.customPrompt, input.editInstruction].filter(Boolean).join("\n"), providerAssets, async asset => getAssetBytes(providerAssets.find(entry => entry.id === asset.id)!));
+    const moderation = await auditGenerationInputs(actor.ownerId, [input.customPrompt, userEditInstruction(input.editInstruction)].filter(Boolean).join("\n"), providerAssets, async asset => getAssetBytes(providerAssets.find(entry => entry.id === asset.id)!));
     const price = quoteGenerationPrice({ modelId: input.providerPreference, purpose: input.purpose, requestedResolution: input.resolution, inputImageCount: providerAssets.length, outputCount: input.outputCount, quality: input.quality, aspectRatio: input.aspectRatio }, privateTestMode && privateTest ? { privateTest: { config: privateTest, actor } } : { production: true });
     const priceExpectation = readGenerationPriceExpectation(rawBody);
     const billing = generationBilling(price);

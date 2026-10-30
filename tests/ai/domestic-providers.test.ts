@@ -170,19 +170,19 @@ test("all three Qwen choices send the selected model to the fixed Beijing endpoi
   }
 });
 
-test("all six domestic models carry the four realism levels through the final provider request", async () => {
+test("all six domestic models send the photo-level prompt for every legacy realism level", async () => {
   const levels = ["conceptual", "rendered", "realistic", "photorealistic"] as const satisfies readonly VisualRealism[];
   const expectedHashes = {
     seedream: {
-      conceptual: "ee92dd7b621218beadc96945915f135eee9fc290133ebc4b4b7d409a89bb64c6",
-      rendered: "9f91ac0119cf326c539dd9382d8084a02fade0a64061efd4717170c17dcbb5b5",
-      realistic: "e55a287ca003003a91b524e62d9975b63c4809251c8efaa644b3d01e2d54c087",
+      conceptual: "cb3977a21b501f64c00eeb1b4eebdf26e61330b7f2f72c987a2aeb3dfb237b67",
+      rendered: "cb3977a21b501f64c00eeb1b4eebdf26e61330b7f2f72c987a2aeb3dfb237b67",
+      realistic: "cb3977a21b501f64c00eeb1b4eebdf26e61330b7f2f72c987a2aeb3dfb237b67",
       photorealistic: "cb3977a21b501f64c00eeb1b4eebdf26e61330b7f2f72c987a2aeb3dfb237b67",
     },
     qwen: {
-      conceptual: "ee48769de86ad019153b3aaa03a682d0dd6554f5b95d535b9901e60b53fbd646",
-      rendered: "caf7926998905447fa61e5bdff9443fc6495311d38118743a68f0df363d114a6",
-      realistic: "1e2ae181361ec31848a2e908f8db1c1bca8a623cffe272f37ee37b71ef424fed",
+      conceptual: "1d2a3ad84026a6f32792541f505a69de568d7ff48752c80aa361b736dc43d1fb",
+      rendered: "1d2a3ad84026a6f32792541f505a69de568d7ff48752c80aa361b736dc43d1fb",
+      realistic: "1d2a3ad84026a6f32792541f505a69de568d7ff48752c80aa361b736dc43d1fb",
       photorealistic: "1d2a3ad84026a6f32792541f505a69de568d7ff48752c80aa361b736dc43d1fb",
     },
   } as const;

@@ -2,7 +2,7 @@ import { NEW_STYLE_DATA, NEW_SCHEME_DATA } from "../../lib/ai/design-schemes-new
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
-import { compileInteriorPrompt, PROMPT_TEMPLATE_VERSION, SELF_SERVICE_PROMPT_TEMPLATE_VERSION } from "../../lib/ai/prompt";
+import { compileInteriorPrompt, PROMPT_TEMPLATE_VERSION, ADVANCED_PROMPT_TEMPLATE_VERSION, SELF_SERVICE_PROMPT_TEMPLATE_VERSION } from "../../lib/ai/prompt";
 import { STYLE_PRESETS } from "../../lib/ai/styles";
 import { parseJob } from "../../components/site/api";
 import { parseCreateJobInput, isCompatibleReplayHash } from "../../lib/server/job-contract";
@@ -65,12 +65,12 @@ test("client job parsing keeps only supported visual realism values", () => {
   assert.equal(parseJob({ id: "job", status: "SUCCEEDED", visualRealism: "unknown", results: [] }).visualRealism, undefined);
 });
 
-test("each visual realism level compiles a distinct directive", () => {
+test("concept ignores legacy visual realism levels and always compiles the photo-level directive", () => {
   const request = { sourceImage: { bytes: new Uint8Array([1]), mimeType: "image/png" as const }, workflowType: "concept" as const, resolution: "1K" as const, aspectRatio: "4:3" as const, quality: "standard" as const, style: { presetId: "modern-minimalist" }, lighting: { timeOfDay: "day" as const, lampState: "mixed" as const, colorTemperatureKelvin: 4000 }, renovationScope: "restyle" as const, outputCount: 1 };
   const style = { id: "modern-minimalist", name: "现代", description: "", preview: "", promptDirective: "modern" };
   const prompts = ["conceptual", "rendered", "realistic", "photorealistic"].map((visualRealism) => compileInteriorPrompt({ ...request, visualRealism: visualRealism as never }, style).text);
-  assert.equal(new Set(prompts).size, 4);
-  assert.ok(prompts.every((prompt) => prompt.includes("Visual expression:")));
+  assert.equal(new Set(prompts).size, 1);
+  assert.match(prompts[0]!, /photograph-level|实景摄影|室内摄影/u);
 });
 
 test("lamp-off prompt forbids artificial glow and omits conflicting color temperature", () => {
@@ -101,7 +101,7 @@ test("v12 concept keeps style identity while advanced is neutral and both preser
       assert.match(prompt.text, /Keep every existing door and window opening at its original position, size, and proportions/u);
       assert.match(prompt.text, /Retain any necessary fall-protection function/u);
       assert.doesNotMatch(prompt.text, /remove original window frames|remove old frames or visible iron bars|watermark/iu);
-      assert.equal(prompt.templateVersion, PROMPT_TEMPLATE_VERSION);
+      assert.equal(prompt.templateVersion, prompt === advanced ? ADVANCED_PROMPT_TEMPLATE_VERSION : PROMPT_TEMPLATE_VERSION);
     }
   }
   const floorplan = compileInteriorPrompt({ ...common, workflowType: "floorplan", style: { presetId: "modern-minimalist" } }, STYLE_PRESETS[0]);

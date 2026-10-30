@@ -1,3 +1,4 @@
+import { userEditInstruction } from "@/lib/domain/bare-shell";
 import {
   generateInteriorImages,
   AiServiceError,
@@ -83,7 +84,7 @@ export async function processGenerationJob(job: PersistedJob): Promise<void> {
       );
     }
 
-    await auditGenerationInputs(job.ownerId,[job.customPrompt,job.editInstruction].filter(Boolean).join("\n"),[source,reference,...additionalAssets,mask,depth,normal].filter((asset):asset is PersistedAsset=>Boolean(asset)),async asset=>{const current=await getAsset(asset.id,job.ownerId);if(!current)throw new ApiError(404,"ASSET_NOT_FOUND","图片不可用。");return getAssetBytes(current);});
+    await auditGenerationInputs(job.ownerId,[job.customPrompt,userEditInstruction(job.editInstruction)].filter(Boolean).join("\n"),[source,reference,...additionalAssets,mask,depth,normal].filter((asset):asset is PersistedAsset=>Boolean(asset)),async asset=>{const current=await getAsset(asset.id,job.ownerId);if(!current)throw new ApiError(404,"ASSET_NOT_FOUND","图片不可用。");return getAssetBytes(current);});
     const request = await buildAiRequest(
       job,
       source,

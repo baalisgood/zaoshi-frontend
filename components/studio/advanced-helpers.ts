@@ -1,4 +1,5 @@
 import { localEditInstruction, type LocalEditOperation } from "@/lib/domain/local-edit";
+import { BARE_SHELL_INSTRUCTION } from "@/lib/domain/bare-shell";
 
 export type VisionArtifactLike = { artifactType?: string; kind?: string };
 export type VisionClassification<T extends VisionArtifactLike> = {
@@ -41,6 +42,8 @@ export function mergeAdvancedSettings<T extends AdvancedSettingsLike>(current: T
 
 export type AdvancedControlMode = "none" | "depth" | "depth-normal";
 export type AdvancedGenerationPayloadInput = {
+  /** 毛坯还原: one site photo only; every design, lighting and reference field is dropped. */
+  bareShell?: boolean;
   localEdit?: { operation: LocalEditOperation; sourceAssetId: string; annotationAssetId: string; referenceAssetIds: string[] };
   workflowType: "advanced";
   purpose: "preview" | "final";
@@ -72,6 +75,15 @@ export type AdvancedGenerationPayloadInput = {
 /** Builds the Advanced API contract; only uploaded, role-labelled assets are included. */
 export function buildAdvancedGenerationPayload(input: AdvancedGenerationPayloadInput): Record<string, unknown> {
   const { controlMode, depthAssetId, normalAssetId } = input;
+  if (input.bareShell) {
+    return {
+      workflowType: "advanced", purpose: "final", sourceAssetId: input.sourceAssetId, editInstruction: BARE_SHELL_INSTRUCTION,
+      lightingPreset: "noon", preservationMode: "structure", spaceType: "unspecified",
+      providerPreference: input.providerPreference, resolution: input.resolution, aspectRatio: input.aspectRatio, quality: input.quality, outputCount: input.outputCount,
+      ...(input.billingMode ? { billingMode: input.billingMode } : {}),
+      expectedPriceVersion: input.expectedPriceVersion, expectedTotalCredits: input.expectedTotalCredits, idempotencyKey: input.idempotencyKey,
+    };
+  }
   if (input.localEdit) {
     const local = input.localEdit;
     if (local.referenceAssetIds.length > 3) throw new Error("局部参考图最多三张。");

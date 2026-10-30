@@ -13,6 +13,8 @@ type Props = {
   workflow: ReferenceKind;
   selectionContent?: ReactNode;
   localEditing?: boolean;
+  /** 毛坯还原: only the site photo is used; every other slot stays but is excluded, as in local editing. */
+  sourceOnly?: boolean;
   source?: UploadedImage;
   onSourceChange: (image?: UploadedImage) => void;
   styleReference?: UploadedImage;
@@ -45,7 +47,9 @@ type Props = {
 };
 
 /** Shared left-side input vocabulary. Every accepted reference is submitted with its fixed role. */
-export function ReferenceTray({ selectionContent, localEditing = false, workflow, source, onSourceChange, styleReference, onStyleReferenceChange, onStyleReferenceStateChange, softReferences = [], onSoftReferencesChange, depth, onDepthChange, normal, onNormalChange, materialReferences = [], onMaterialReferencesChange, colorReferences = [], onColorReferencesChange, compositionReferences = [], onCompositionReferencesChange, onStructureReferenceChange, structureReference, onOpenSelection, onUploadsStateChange, model, inputCount, inputBytes, inputsAllowed, controlMode = "none", controlSourceVersion, controlSourceCurrent, referenceHints = [] }: Props) {
+export function ReferenceTray({ selectionContent, localEditing: localEditMode = false, sourceOnly = false, workflow, source, onSourceChange, styleReference, onStyleReferenceChange, onStyleReferenceStateChange, softReferences = [], onSoftReferencesChange, depth, onDepthChange, normal, onNormalChange, materialReferences = [], onMaterialReferencesChange, colorReferences = [], onColorReferencesChange, compositionReferences = [], onCompositionReferencesChange, onStructureReferenceChange, structureReference, onOpenSelection, onUploadsStateChange, model, inputCount, inputBytes, inputsAllowed, controlMode = "none", controlSourceVersion, controlSourceCurrent, referenceHints = [] }: Props) {
+  const localEditing = localEditMode || sourceOnly;
+  const excludedLabel = sourceOnly ? "毛坯还原时不参与" : "局部编辑时不参与";
   const [notice, setNotice] = useState("");
   const [localSoftReferences, setLocalSoftReferences] = useState<(UploadedImage | undefined)[]>(softReferences);
   const [localMaterialReferences, setLocalMaterialReferences] = useState<UploadedImage[]>(materialReferences);
@@ -71,7 +75,8 @@ export function ReferenceTray({ selectionContent, localEditing = false, workflow
   const safeDepthChange = onDepthChange ?? (() => undefined);
   const safeNormalChange = onNormalChange ?? (() => undefined);
   const setUploadState = (name: string, state: "idle" | "uploading" | "ready" | "error") => setUploadStates((current) => ({ ...current, [name]: state }));
-  useEffect(() => { onUploadsStateChange?.(Object.values(uploadStates).some((state) => state === "uploading" || state === "error")); }, [onUploadsStateChange, uploadStates]);
+  // Excluded slots (毛坯还原) must not block submission with a stale upload state.
+  useEffect(() => { onUploadsStateChange?.(Object.entries(uploadStates).some(([name, state]) => (!sourceOnly || name === "source") && (state === "uploading" || state === "error"))); }, [onUploadsStateChange, uploadStates, sourceOnly]);
   const isAdvanced = workflow === "advanced";
   const maxInputImages = imageModelCapabilities[model].maxInputImages;
   const reserved = (source ? 0 : 1) + (controlMode !== "none" && !depth ? 1 : 0) + (controlMode === "depth-normal" && !normal ? 1 : 0);
@@ -85,9 +90,9 @@ export function ReferenceTray({ selectionContent, localEditing = false, workflow
     else next[index] = undefined;
     saveLatestSoftReferences(next);
   };
-  const singleReference = (name: string, title: string, hint: string, kind: string, value: UploadedImage | undefined, onChange: (image?: UploadedImage) => void, status: "参与本次生成" | "启用对应结构模式后参与", onStateChange?: (state: "idle" | "uploading" | "ready" | "error") => void) => <fieldset className="reference-input-group" disabled={localEditing && name !== "source"}><ImageUploadField compact draftKey={`${workflow}:${name}`} title={title} hint={hint} kind={kind} value={value} model={model} onChange={onChange} onStateChange={(state) => { setUploadState(name, state); onStateChange?.(state); }} participationStatus={localEditing ? "局部编辑时不参与" : status} uploadGate={admission.field(name, Boolean(value), name === "source", name === "source", value?.byteSize ?? 0)} disabled={localEditing && name !== "source"} /></fieldset>;
+  const singleReference = (name: string, title: string, hint: string, kind: string, value: UploadedImage | undefined, onChange: (image?: UploadedImage) => void, status: "参与本次生成" | "启用对应结构模式后参与", onStateChange?: (state: "idle" | "uploading" | "ready" | "error") => void) => <fieldset className="reference-input-group" disabled={localEditing && name !== "source"}><ImageUploadField compact draftKey={`${workflow}:${name}`} title={title} hint={hint} kind={kind} value={value} model={model} onChange={onChange} onStateChange={(state) => { setUploadState(name, state); onStateChange?.(state); }} participationStatus={localEditing ? excludedLabel : status} uploadGate={admission.field(name, Boolean(value), name === "source", name === "source", value?.byteSize ?? 0)} disabled={localEditing && name !== "source"} /></fieldset>;
   return <section className="reference-tray" aria-label="参考素材与局部选区">
-    <div className="panel-heading"><span>01</span><div><h2>参考素材</h2><p>图片先保存在当前标签页，点击生成后才上传。{localEditing ? "局部编辑使用下方独立原图和局部参考；上方素材不参与本次生成。" : `输入图片 ${inputCount}/${maxInputImages}（包含底图）。`}</p></div></div>
+    <div className="panel-heading"><span>01</span><div><h2>参考素材</h2><p>图片先保存在当前标签页，点击生成后才上传。{sourceOnly ? "毛坯还原只使用结构参考（现场照片）；其余素材保留但不参与本次生成。" : localEditing ? "局部编辑使用下方独立原图和局部参考；上方素材不参与本次生成。" : `输入图片 ${inputCount}/${maxInputImages}（包含底图）。`}</p></div></div>
     <div className="reference-tray-grid">
       {singleReference("source", isAdvanced ? "结构参考" : "现场 / 方案基底", "必填 · 现场照片或当前方案基底", "source", source, onSourceChange, "参与本次生成")}
       {singleReference("style", "风格参考", "可选 · 色调、材质与氛围", "reference", styleReference, onStyleReferenceChange, "参与本次生成", onStyleReferenceStateChange)}
@@ -100,12 +105,12 @@ export function ReferenceTray({ selectionContent, localEditing = false, workflow
         {singleReference("composition", "构图参考", "可选 · 视角、取景或构图参考", "reference", currentCompositionReferences[0], (image) => saveCompositionReferences(image ? [image] : []), "参与本次生成")}
         {singleReference("structure", "门窗 / 结构参考", "可选 · 门、窗、楼梯等结构实物参考", "reference", structureReference, onStructureReferenceChange ?? (() => undefined), "参与本次生成")}
         {controlSourceVersion ? <>
-          <ImageUploadField key={`depth:${controlSourceVersion}`} draftKey={`${workflow}:depth:${controlSourceVersion}`} compact disabled={localEditing} title="Depth 深度参考" hint="相对远近的软参考，不是测量图" kind="depth" value={depth} model={model} uploadContext={controlSourceCurrent} onChange={safeDepthChange} onStateChange={(state) => setUploadState("depth", state)} participationStatus={localEditing ? "局部编辑时不参与" : "启用对应结构模式后参与"} uploadGate={controlMode === "none" ? { ...admission.field("depth", Boolean(depth), true, false, depth?.byteSize ?? 0), disabledReason: depth ? undefined : "请先选择深度结构模式。", begin: () => Boolean(depth), complete: () => Boolean(depth) } : admission.field("depth", Boolean(depth), true, false, depth?.byteSize ?? 0)} />
-          <ImageUploadField key={`normal:${controlSourceVersion}`} draftKey={`${workflow}:normal:${controlSourceVersion}`} compact disabled={localEditing} title="Normal 法线参考" hint="表面朝向的软参考，不是材质图" kind="normal" value={normal} model={model} uploadContext={controlSourceCurrent} onChange={safeNormalChange} onStateChange={(state) => setUploadState("normal", state)} participationStatus={localEditing ? "局部编辑时不参与" : "启用对应结构模式后参与"} uploadGate={controlMode !== "depth-normal" ? { ...admission.field("normal", Boolean(normal), true, false, normal?.byteSize ?? 0), disabledReason: normal ? undefined : "请先选择深度＋法线结构模式。", begin: () => Boolean(normal), complete: () => Boolean(normal) } : admission.field("normal", Boolean(normal), true, false, normal?.byteSize ?? 0)} />
+          <ImageUploadField key={`depth:${controlSourceVersion}`} draftKey={`${workflow}:depth:${controlSourceVersion}`} compact disabled={localEditing} title="Depth 深度参考" hint="相对远近的软参考，不是测量图" kind="depth" value={depth} model={model} uploadContext={controlSourceCurrent} onChange={safeDepthChange} onStateChange={(state) => setUploadState("depth", state)} participationStatus={localEditing ? excludedLabel : "启用对应结构模式后参与"} uploadGate={controlMode === "none" ? { ...admission.field("depth", Boolean(depth), true, false, depth?.byteSize ?? 0), disabledReason: depth ? undefined : "请先选择深度结构模式。", begin: () => Boolean(depth), complete: () => Boolean(depth) } : admission.field("depth", Boolean(depth), true, false, depth?.byteSize ?? 0)} />
+          <ImageUploadField key={`normal:${controlSourceVersion}`} draftKey={`${workflow}:normal:${controlSourceVersion}`} compact disabled={localEditing} title="Normal 法线参考" hint="表面朝向的软参考，不是材质图" kind="normal" value={normal} model={model} uploadContext={controlSourceCurrent} onChange={safeNormalChange} onStateChange={(state) => setUploadState("normal", state)} participationStatus={localEditing ? excludedLabel : "启用对应结构模式后参与"} uploadGate={controlMode !== "depth-normal" ? { ...admission.field("normal", Boolean(normal), true, false, normal?.byteSize ?? 0), disabledReason: normal ? undefined : "请先选择深度＋法线结构模式。", begin: () => Boolean(normal), complete: () => Boolean(normal) } : admission.field("normal", Boolean(normal), true, false, normal?.byteSize ?? 0)} />
         </> : null}
       </>}
     </div>
-    {selectionContent ?? <div className="selection-entry"><div className="selection-entry-copy"><strong>局部选区</strong><p>{!source ? "请先上传底图，再编辑局部选区。" : supportsNativeInteractiveEdit ? "当前模型官方支持标注式交互编辑；造室本版仅在本地保存标注，尚不会随任务发送。" : "当前模型没有已接入的硬蒙版接口；标注只保存在本地，不参与本次生成。"}</p></div><div className="selection-example" aria-label="标注示意：圈选沙发"><div className="selection-example-canvas" style={{ backgroundImage: 'url("https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=760&q=82")' }} aria-hidden="true"><i className="selection-example-mark" /><span>圈选沙发</span></div><small>操作示意：圈选沙发；本地标注当前不参与生成</small></div><button type="button" className="secondary-button" onClick={onOpenSelection} disabled={!onOpenSelection || !source}>编辑选区</button></div>}
+    {sourceOnly ? null : selectionContent ?? <div className="selection-entry"><div className="selection-entry-copy"><strong>局部选区</strong><p>{!source ? "请先上传底图，再编辑局部选区。" : supportsNativeInteractiveEdit ? "当前模型官方支持标注式交互编辑；造室本版仅在本地保存标注，尚不会随任务发送。" : "当前模型没有已接入的硬蒙版接口；标注只保存在本地，不参与本次生成。"}</p></div><div className="selection-example" aria-label="标注示意：圈选沙发"><div className="selection-example-canvas" style={{ backgroundImage: 'url("https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=760&q=82")' }} aria-hidden="true"><i className="selection-example-mark" /><span>圈选沙发</span></div><small>操作示意：圈选沙发；本地标注当前不参与生成</small></div><button type="button" className="secondary-button" onClick={onOpenSelection} disabled={!onOpenSelection || !source}>编辑选区</button></div>}
     {inputCount > maxInputImages && <p className="summary-note error-text" role="alert">切换模型后当前输入超出上限；图片不会被删除，请减少到 {maxInputImages} 张后提交。</p>}{notice && <p className="reference-notice" role="status">{notice}</p>}{Object.values(uploadStates).some((state) => state === "error") && <p className="summary-note error-text" role="alert">有参考图读取失败，请移除或重新选择后再提交。</p>}
   </section>;
 }

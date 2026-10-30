@@ -48,3 +48,9 @@ test("buildAdvancedGenerationPayload includes role references but excludes UI-on
     assert.equal(key in none, false, key);
   }
 });
+
+test("毛坯还原 payload carries only the site photo, output settings and billing", () => {
+  const payload = buildAdvancedGenerationPayload({ ...payloadInput("depth"), bareShell: true, customPrompt: "ignored", referenceAssetId: "style", additionalReferences: [{ assetId: "sofa", role: "furnishing" }], depthAssetId: "depth" });
+  assert.deepEqual(Object.keys(payload).sort(), ["aspectRatio", "editInstruction", "expectedPriceVersion", "expectedTotalCredits", "idempotencyKey", "lightingPreset", "outputCount", "preservationMode", "providerPreference", "purpose", "quality", "resolution", "sourceAssetId", "spaceType", "workflowType"].sort());
+  assert.equal(payload.editInstruction, "bare-shell:v1");
+});
