@@ -112,8 +112,8 @@ export function LocalSelectionPanel({ local, source, model }: { local: ReturnTyp
       <div className="selection-example">{local.draft ? <img className="local-selection-preview" src={local.draft.annotation.url} alt="已保存的局部编辑草稿，红色标记为修改区域" /> : <button type="button" className={`selection-sofa-example${demoPlaying ? " is-playing" : ""}`} onClick={() => setDemoPlaying((playing) => !playing)} onPointerLeave={(event) => { if (event.pointerType !== "touch") setDemoPlaying(false); }} onBlur={() => setDemoPlaying(false)} aria-label="预览局部重绘示意：圈选浅色沙发并替换为深绿色沙发">
         <svg viewBox="0 0 900 675" aria-hidden="true">
           <defs><clipPath id={demoClipId}><path d="M36 390 Q39 364 70 352 Q170 329 285 328 Q339 329 361 344 L414 350 L422 412 L414 439 Q354 450 338 479 Q330 513 324 555 L257 559 Q225 577 157 568 L43 558 Z" /></clipPath></defs>
-          <image href="/demo/scene.svg" width="900" height="675" />
-          <image className="selection-sofa-after" href="/demo/scene.svg" width="900" height="675" clipPath={`url(#${demoClipId})`} />
+          <image href="/style-previews/french-modern.webp" width="900" height="675" />
+          <image className="selection-sofa-after" href="/style-previews/french-modern-sofa-green.webp" width="900" height="675" clipPath={`url(#${demoClipId})`} />
           <path className="selection-sofa-outline" d={sofaOutline} pathLength="1" fill="#ef5965" stroke="#ef5965" strokeWidth="2.5" strokeLinejoin="round" />
           <g className="selection-sofa-brush" style={{ offsetPath: `path("${sofaOutline}")` }}><path d="M0 0 Q-2 -14 8 -15 L17 -7 Q13 2 0 0Z" fill="#ef5965" stroke="white" strokeWidth="2" /><path d="M9 -15 L29 -40 Q33 -44 37 -40 Q41 -37 37 -33 L17 -7Z" fill="#243c32" stroke="white" strokeWidth="3" /></g>
         </svg><span>圈选沙发 · 预览替换效果</span>

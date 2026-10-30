@@ -135,7 +135,7 @@ export function SelfServiceStudio() {
           <PromptComposer id="self-service-prompt" value={prompt} onChange={setPrompt} privateTest={privateTest} contextKey={references.map((image) => image.id).join(",")} />
         </div>
 
-        <aside className="studio-inspector" aria-label="自助生成设置">
+        <aside className="studio-inspector zs-params" aria-label="自助生成设置">
           <section className="inspector-group">
             <div className="panel-heading">
               <span>03</span>
@@ -144,20 +144,20 @@ export function SelfServiceStudio() {
                 <p>参考图将自动匹配最近的受支持画面比例。</p>
               </div>
             </div>
-            <div className="output-parameter-row"><div className="model-parameter"><ImageModelSelect value={provider} onChange={setProvider} /></div><QualityField model={provider} value={quality} onChange={setQuality} /></div><div className="output-parameter-row"><Segmented label="清晰度" disabledDescription="当前模型不支持的清晰度已禁用。" value={resolution} options={imageModelResolutionOptions(provider)} onChange={setResolution} /><Segmented label="画面比例" value={aspectRatio} options={["1:1", "4:3", "3:2", "16:9", "9:16"].map((value) => ({ value, label: value, disabled: true }))} onChange={() => undefined} description={`当前自动比例：${aspectRatio}；根据第一张参考图自动匹配，无参考图时使用4:3。`} disabledDescription="画面比例自动匹配，不可手动修改。" /></div>
-            <OutputCounter value={outputCount} onChange={setOutputCount} busy={controller.busy} />
-            <div className="summary-title"><span>任务摘要</span><small>{outputCount}张输出</small></div>
+            <div className="param-group"><h3 className="param-group-title">模型与画质</h3><div className="output-parameter-row"><div className="model-parameter"><ImageModelSelect value={provider} onChange={setProvider} /></div><QualityField model={provider} value={quality} onChange={setQuality} /></div><div className="output-parameter-row"><Segmented label="清晰度" disabledDescription="当前模型不支持的清晰度已禁用。" value={resolution} options={imageModelResolutionOptions(provider)} onChange={setResolution} /><Segmented label="画面比例" value={aspectRatio} options={["1:1", "4:3", "3:2", "16:9", "9:16"].map((value) => ({ value, label: value, disabled: true }))} onChange={() => undefined} description={`当前自动比例：${aspectRatio}；根据第一张参考图自动匹配，无参考图时使用4:3。`} disabledDescription="画面比例自动匹配，不可手动修改。" /></div>
+            </div><div className="param-group param-submit"><h3 className="param-group-title">输出与提交</h3><OutputCounter value={outputCount} onChange={setOutputCount} busy={controller.busy} />
+            <div className="summary-card"><div className="summary-title"><span>任务摘要</span><small>{outputCount}张输出</small></div>
             <dl className="task-summary"><div><dt>图像模型</dt><dd>{imageModelOptions.find((item) => item.value === provider)?.label}</dd></div>
               <div><dt>参考图</dt><dd>{references.length ? `${references.length} 张` : "未上传"}</dd></div>
               <div><dt>画面比例</dt><dd>{aspectRatio}</dd></div>
               <div><dt>提示词</dt><dd>{prompt.trim() ? `${prompt.trim().length} 字` : "未填写"}</dd></div>
               <div><dt>清晰度</dt><dd>{resolution}</dd></div>
               <div><dt>模型质量</dt><dd>{imageQualityLabel(quality)}</dd></div>
-            </dl>
+            </dl></div>
             <div className="generation-actions">
               <button className="primary-button" type="button" disabled={!canGenerate || !pricing.final || pricing.insufficient} onClick={() => void generate()}>{privateTest ? "提交生图" : <>提交生图 · {pricing.final ? `${pricing.final.totalCredits}积分` : pricing.error ? "报价失败" : "报价中"}</>}</button>
             </div>
-            <GenerationPriceDetails quote={pricing.final} />{pricing.insufficient && <p className="summary-note error-text" role="status">可用积分不足，请先充值后再生成。</p>}{pricing.error && <p className="summary-note error-text" role="alert">{pricing.error}</p>}
+            <GenerationPriceDetails quote={pricing.final} />{pricing.insufficient && <p className="summary-note error-text" role="status">可用积分不足，请先充值后再生成。</p>}{pricing.error && <p className="summary-note error-text" role="alert">{pricing.error}</p>}</div>
 
           </section>
         </aside>

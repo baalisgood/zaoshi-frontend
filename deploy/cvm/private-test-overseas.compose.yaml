@@ -1,0 +1,28 @@
+# Optional overlay for private-test.compose.yaml. Keep the existing single consumer.
+# Install/verify the SSH service, socket directory and secrets before enabling it.
+services:
+  private-test-consumer:
+    environment:
+      ZAOSHI_OPENAI_SLOT_ID: openai-private-test
+      ZAOSHI_OPENAI_GATEWAY_KEY_FILE: /run/secrets/openai-gateway-key
+      ZAOSHI_GOOGLE_SLOT_ID: google-private-test
+      ZAOSHI_GOOGLE_GATEWAY_KEY_FILE: /run/secrets/google-gateway-key
+    volumes:
+      - type: bind
+        source: /var/lib/zaoshi/overseas-sockets
+        target: /var/lib/zaoshi/overseas-sockets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/zaoshi/private-test/openai-gateway-key
+        target: /run/secrets/openai-gateway-key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /etc/zaoshi/private-test/google-gateway-key
+        target: /run/secrets/google-gateway-key
+        read_only: true
+        bind:
+          create_host_path: false

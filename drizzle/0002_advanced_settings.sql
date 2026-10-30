@@ -1,0 +1,1 @@
+ALTER TABLE `generation_jobs` ADD `advanced_settings_json` text DEFAULT '{"version":1,"geometryFidelity":"balanced","cameraPolicy":"locked","furnishingDensity":"balanced","materialExpression":"natural","lightingContrast":"balanced"}' NOT NULL;

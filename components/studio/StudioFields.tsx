@@ -17,18 +17,18 @@ export type UploadGate = { disabledReason?: string; begin: (file: File) => boole
 const fallbackStyles: StyleRecord[] = [];
 /* Style names, descriptions and previews are server-owned; never duplicate them here. */
 /*
-  { id: "modern-minimalist", name: "现代简约", description: "干净线条与克制中性色", imageUrl: "/demo/scene.svg" },
-  { id: "cream-cozy", name: "奶油风", description: "柔和米白与圆润家具", imageUrl: "/demo/scene.svg" },
-  { id: "wabi-sabi", name: "侘寂风", description: "自然肌理与安静留白", imageUrl: "/demo/scene.svg" },
-  { id: "italian-minimalist", name: "意式极简", description: "精确比例与材质对比", imageUrl: "/demo/scene.svg" },
-  { id: "contemporary-luxury", name: "现代轻奢", description: "石材、金属与精致灯光", imageUrl: "/demo/scene.svg" },
-  { id: "nordic-natural", name: "北欧自然", description: "浅木、自然光与日常舒适", imageUrl: "/demo/scene.svg" },
-  { id: "new-chinese", name: "新中式", description: "现代比例与东方木作", imageUrl: "/demo/scene.svg" },
-  { id: "mid-century-modern", name: "中古现代", description: "温润木色与经典家具", imageUrl: "/demo/scene.svg" },
-  { id: "japandi", name: "日式原木", description: "清浅木色与低重心家具", imageUrl: "/demo/scene.svg" },
-  { id: "french-modern", name: "法式现代", description: "简化线板与优雅比例", imageUrl: "/demo/scene.svg" },
-  { id: "industrial-loft", name: "工业质感", description: "深色金属与粗粝表面", imageUrl: "/demo/scene.svg" },
-  { id: "coastal-relaxed", name: "海岸松弛", description: "明亮织物与轻盈自然色", imageUrl: "/demo/scene.svg" },
+  { id: "modern-minimalist", name: "现代简约", description: "干净线条与克制中性色", imageUrl: "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=760&q=82" },
+  { id: "cream-cozy", name: "奶油风", description: "柔和米白与圆润家具", imageUrl: "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea?auto=format&fit=crop&w=760&q=82" },
+  { id: "wabi-sabi", name: "侘寂风", description: "自然肌理与安静留白", imageUrl: "https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=760&q=82" },
+  { id: "italian-minimalist", name: "意式极简", description: "精确比例与材质对比", imageUrl: "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=760&q=82" },
+  { id: "contemporary-luxury", name: "现代轻奢", description: "石材、金属与精致灯光", imageUrl: "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=760&q=82" },
+  { id: "nordic-natural", name: "北欧自然", description: "浅木、自然光与日常舒适", imageUrl: "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=760&q=82" },
+  { id: "new-chinese", name: "新中式", description: "现代比例与东方木作", imageUrl: "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=760&q=82" },
+  { id: "mid-century-modern", name: "中古现代", description: "温润木色与经典家具", imageUrl: "https://images.unsplash.com/photo-1615874694520-474822394e73?auto=format&fit=crop&w=760&q=82" },
+  { id: "japandi", name: "日式原木", description: "清浅木色与低重心家具", imageUrl: "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=760&q=82" },
+  { id: "french-modern", name: "法式现代", description: "简化线板与优雅比例", imageUrl: "https://images.unsplash.com/photo-1615529162924-f8605388461d?auto=format&fit=crop&w=760&q=82" },
+  { id: "industrial-loft", name: "工业质感", description: "深色金属与粗粝表面", imageUrl: "https://images.unsplash.com/photo-1600563438938-a9a27216b4f5?auto=format&fit=crop&w=760&q=82" },
+  { id: "coastal-relaxed", name: "海岸松弛", description: "明亮织物与轻盈自然色", imageUrl: "https://images.unsplash.com/photo-1600566753051-f0b89df2dd90?auto=format&fit=crop&w=760&q=82" },
 ]; */
 
 export function useStylePresets() {
@@ -255,7 +255,7 @@ export function StylePicker({ styles, value, onChange }: { styles: StyleRecord[]
 
 export function Segmented<T extends string>({ label, value, options, onChange, description, disabledDescription }: { label: string; value: T; options: readonly { value: T; label: string; note?: string; disabled?: boolean }[]; onChange: (value: T) => void; description?: string; disabledDescription?: string }) {
   return (
-    <fieldset className="field-set"><legend>{label}</legend>{description && <p className="field-description">{description}</p>}<div className="segmented-control">{options.map((option) => <button key={option.value} type="button" disabled={option.disabled} aria-pressed={value === option.value} className={value === option.value ? "selected" : ""} title={option.note} onClick={() => onChange(option.value)}>{option.label}</button>)}</div>{options.find((option) => option.value === value)?.note && <p className="field-description">{options.find((option) => option.value === value)?.note}</p>}{options.some((option) => option.disabled) && <p className="field-description">{disabledDescription ?? "当前模型的输入图名额不足时，对应结构模式不可选；可先移除其他参考图。"}</p>}</fieldset>
+    <fieldset className="field-set" data-label={label}><legend>{label}</legend>{description && <p className="field-description">{description}</p>}<div className="segmented-control">{options.map((option) => <button key={option.value} type="button" data-value={option.value} disabled={option.disabled} aria-pressed={value === option.value} className={value === option.value ? "selected" : ""} title={option.note} onClick={() => onChange(option.value)}>{option.label}</button>)}</div>{options.find((option) => option.value === value)?.note && <p className="field-description">{options.find((option) => option.value === value)?.note}</p>}{options.some((option) => option.disabled) && <p className="field-description">{disabledDescription ?? "当前模型的输入图名额不足时，对应结构模式不可选；可先移除其他参考图。"}</p>}</fieldset>
   );
 }
 

@@ -1,0 +1,3 @@
+import { errorResponse, jsonResponse } from "@/lib/server/api";
+import { listPublicGallery, parseGalleryCategory, parseGalleryLimit, decodeGalleryCursor } from "@/lib/server/gallery";
+export async function GET(request: Request) { try { const url = new URL(request.url); const rawCategory = url.searchParams.get("category"); const category = rawCategory ? parseGalleryCategory(rawCategory) : undefined; const limit = parseGalleryLimit(url.searchParams.get("limit")); const cursor = url.searchParams.get("cursor"); return jsonResponse(await listPublicGallery({ category, limit, cursor: cursor ? decodeGalleryCursor(cursor, category ?? null) : undefined })); } catch (error) { return errorResponse(error, crypto.randomUUID()); } }

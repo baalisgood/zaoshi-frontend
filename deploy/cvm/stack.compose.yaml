@@ -1,0 +1,102 @@
+services:
+  zaoshi-web:
+    image: zaoshi-web:${ZAOSHI_WEB_IMAGE_TAG:?set ZAOSHI_WEB_IMAGE_TAG to the full release commit SHA}
+    container_name: zaoshi-web
+    init: true
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${ZAOSHI_WEB_ENV_FILE:-./web.env}
+    environment:
+      NODE_ENV: production
+      BACKEND_PROFILE: sites-demo
+      TRUST_PLATFORM_IDENTITY_HEADERS: "0"
+      GENERATION_INTERNAL_API_ENABLED: "0"
+      HOST: 0.0.0.0
+      PORT: "3000"
+      ZAOSHI_RUNTIME: node
+      ZAOSHI_SQLITE_PATH: /var/lib/zaoshi/db/zaoshi.sqlite
+      ZAOSHI_OBJECT_ROOT: /var/lib/zaoshi/objects
+      ZAOSHI_MIGRATIONS_DIR: /app/drizzle
+      ZAOSHI_LIFECYCLE_MAINTENANCE_ENABLED: "1"
+      ZAOSHI_LIFECYCLE_INTERVAL_SECONDS: "3600"
+      ZAOSHI_CONSUMER_HEALTH_FILE: /var/lib/zaoshi/consumer-health/health.json
+    ports:
+      - target: 3000
+        published: "3000"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - /var/lib/zaoshi/db:/var/lib/zaoshi/db
+      - /var/lib/zaoshi/objects:/var/lib/zaoshi/objects
+      - /var/lib/zaoshi/consumer-health:/var/lib/zaoshi/consumer-health:ro
+      - /etc/zaoshi/secrets/consumer-hmac:/run/secrets/consumer-hmac:ro
+      - /etc/zaoshi/secrets/queue-ticket:/run/secrets/queue-ticket:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    networks:
+      queue-control: {}
+      web-loopback-publish:
+        gw_priority: 1
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 30s
+
+  generation-consumer:
+    image: zaoshi-generation-consumer:${ZAOSHI_CONSUMER_IMAGE_TAG:?set ZAOSHI_CONSUMER_IMAGE_TAG to the full release commit SHA}
+    container_name: zaoshi-generation-consumer
+    init: true
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${ZAOSHI_CONSUMER_ENV_FILE:-./consumer.env}
+    volumes:
+      - /var/lib/zaoshi/consumer:/var/lib/zaoshi
+      - /var/lib/zaoshi/consumer-health:/var/lib/zaoshi/consumer-health
+      - /etc/zaoshi/secrets/consumer-hmac:/run/secrets/consumer-hmac:ro
+      - /etc/zaoshi/secrets/seedream-api-key:/run/secrets/seedream-api-key:ro
+      - /etc/zaoshi/secrets/qwen-api-key:/run/secrets/qwen-api-key:ro
+    tmpfs:
+      - /run/zaoshi:rw,noexec,nosuid,nodev,mode=0700,uid=10001,gid=10001
+    networks:
+      queue-control: {}
+      provider-egress:
+        gw_priority: 1
+    depends_on:
+      zaoshi-web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "/app/consumer.mjs", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 10m
+
+networks:
+  queue-control:
+    internal: true
+  web-loopback-publish:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+  provider-egress: {}

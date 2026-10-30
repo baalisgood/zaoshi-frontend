@@ -1,0 +1,125 @@
+services:
+  canary-web:
+    image: zaoshi-web:${ZAOSHI_WEB_IMAGE_TAG:?set ZAOSHI_WEB_IMAGE_TAG to the full release commit SHA}
+    container_name: zaoshi-provider-canary-web
+    init: true
+    restart: "no"
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      BACKEND_PROFILE: sites-demo
+      TRUST_PLATFORM_IDENTITY_HEADERS: "0"
+      ZAOSHI_RUNTIME: node
+      ZAOSHI_SQLITE_PATH: /var/lib/zaoshi/provider-canary/db/zaoshi.sqlite
+      ZAOSHI_OBJECT_ROOT: /var/lib/zaoshi/provider-canary/objects
+      ZAOSHI_MIGRATIONS_DIR: /app/drizzle
+      GENERATION_INTERNAL_API_ENABLED: "1"
+      GENERATION_QUEUE_ACCEPTANCE_ENABLED: "0"
+      GENERATION_INTERNAL_TRANSPORT: private-docker
+      GENERATION_INTERNAL_AUDIENCE: zaoshi-provider-canary-v1
+      GENERATION_INTERNAL_CURRENT_KEY_ID: provider-canary-v1
+      GENERATION_INTERNAL_CURRENT_SECRET_FILE: /run/secrets/provider-canary-hmac
+      GENERATION_INTERNAL_TICKET_SECRET_FILE: /run/secrets/provider-canary-ticket
+      GENERATION_INTERNAL_TICKET_TTL_SECONDS: "240"
+      GENERATION_QUEUE_LEASE_SECONDS: "180"
+      GENERATION_QUEUE_OWNER_CONCURRENCY: "1"
+      GENERATION_QUEUE_PROVIDER_CONCURRENCY: "1"
+      GENERATION_QUEUE_SWEEP_LIMIT: "10"
+    volumes:
+      - /var/lib/zaoshi/provider-canary/db:/var/lib/zaoshi/provider-canary/db
+      - /var/lib/zaoshi/provider-canary/objects:/var/lib/zaoshi/provider-canary/objects
+      - /etc/zaoshi/provider-canary/provider-canary-hmac:/run/secrets/provider-canary-hmac:ro
+      - /etc/zaoshi/provider-canary/provider-canary-ticket:/run/secrets/provider-canary-ticket:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    networks:
+      provider-canary-control:
+        aliases: [zaoshi-web]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 30s
+    entrypoint: [flock, -n, -F, -E, "73", /var/lib/zaoshi/provider-canary/db/.web.lock, node, /app/server.js]
+
+  canary-admin:
+    image: zaoshi-provider-canary:${ZAOSHI_CANARY_IMAGE_TAG:?set ZAOSHI_CANARY_IMAGE_TAG to the full release commit SHA}
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    restart: "no"
+    volumes:
+      - /var/lib/zaoshi/provider-canary/db:/var/lib/zaoshi/provider-canary/db
+      - /var/lib/zaoshi/provider-canary/objects:/var/lib/zaoshi/provider-canary/objects
+    entrypoint: [flock, -n, -F, -E, "73", /var/lib/zaoshi/provider-canary/db/.web.lock, node, /app/provider-canary.mjs]
+
+  canary-runner:
+    image: zaoshi-provider-canary:${ZAOSHI_CANARY_IMAGE_TAG:?set ZAOSHI_CANARY_IMAGE_TAG to the full release commit SHA}
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    volumes:
+      - /var/lib/zaoshi/provider-canary/spool:/var/lib/zaoshi/provider-canary/spool
+      - /var/lib/zaoshi/consumer/.consumer.lock:/var/lib/zaoshi/execution/.consumer.lock
+      - /etc/zaoshi/provider-canary/provider-canary-hmac:/run/secrets/provider-canary-hmac:ro
+      - /etc/zaoshi/provider-canary/seedream-api-key:/run/secrets/seedream-api-key:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    networks:
+      provider-canary-control: {}
+      provider-canary-egress:
+        gw_priority: 1
+    depends_on:
+      canary-web:
+        condition: service_healthy
+    entrypoint: [flock, -n, -F, -E, "73", /var/lib/zaoshi/execution/.consumer.lock, node, /app/provider-canary.mjs]
+
+  canary-recover:
+    image: zaoshi-provider-canary:${ZAOSHI_CANARY_IMAGE_TAG:?set ZAOSHI_CANARY_IMAGE_TAG to the full release commit SHA}
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    volumes:
+      - /var/lib/zaoshi/provider-canary/spool:/var/lib/zaoshi/provider-canary/spool
+      - /var/lib/zaoshi/consumer/.consumer.lock:/var/lib/zaoshi/execution/.consumer.lock
+      - /etc/zaoshi/provider-canary/provider-canary-hmac:/run/secrets/provider-canary-hmac:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    networks:
+      provider-canary-control: {}
+    depends_on:
+      canary-web:
+        condition: service_healthy
+    entrypoint: [flock, -n, -F, -E, "73", /var/lib/zaoshi/execution/.consumer.lock, node, /app/provider-canary.mjs]
+
+  canary-probe:
+    image: zaoshi-provider-canary:${ZAOSHI_CANARY_IMAGE_TAG:?set ZAOSHI_CANARY_IMAGE_TAG to the full release commit SHA}
+    read_only: true
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+    networks:
+      provider-canary-control: {}
+    depends_on:
+      canary-web:
+        condition: service_healthy
+    entrypoint: [node, /app/provider-canary.mjs]
+
+networks:
+  provider-canary-control:
+    internal: true
+  provider-canary-egress: {}

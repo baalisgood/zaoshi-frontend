@@ -94,6 +94,7 @@ export function StudioTaskList({ workflowType, refreshKey = "" }: { workflowType
   const [preview, setPreview] = useState<{ url: string; label: string } | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
   const previewDialog = useRef<HTMLDialogElement>(null);
+  const previewOutsideStart = useRef(false);
   const mounted = useRef(true);
   const requestCoordinator = useRef(new TaskRequestCoordinator());
   const abortController = useRef<AbortController | undefined>(undefined);
@@ -253,9 +254,8 @@ export function StudioTaskList({ workflowType, refreshKey = "" }: { workflowType
         </div>
       )}
       {nextCursor && <button type="button" className="task-load-more" onClick={() => void load("append")}>加载更早任务</button>}
-      <dialog ref={previewDialog} className="task-preview-dialog" aria-labelledby="task-preview-title" onClose={() => { setPreview(null); setPreviewFailed(false); }}>
-        <div className="task-preview-heading"><h2 id="task-preview-title">{preview?.label ?? "图片预览"}</h2><button type="button" aria-label="关闭图片预览" onClick={() => previewDialog.current?.close()}>关闭</button></div>
-        <div className="task-preview-media">{previewFailed ? <p role="alert">图片加载失败，请关闭预览后重试。</p> : preview && <img src={preview.url} alt={preview.label} onError={() => setPreviewFailed(true)} />}</div>
+      <dialog ref={previewDialog} className="task-preview-dialog" aria-label={preview?.label ?? "图片预览"} onPointerDown={event => { previewOutsideStart.current = event.button === 0 && event.target === event.currentTarget; }} onPointerUp={event => { if (previewOutsideStart.current && event.button === 0 && event.target === event.currentTarget) event.currentTarget.close(); previewOutsideStart.current = false; }} onPointerCancel={() => { previewOutsideStart.current = false; }} onClose={() => { setPreview(null); setPreviewFailed(false); previewOutsideStart.current = false; }}>
+        {previewFailed ? <p role="alert">图片加载失败，请按 Esc 或点击框外关闭。</p> : preview && <img src={preview.url} alt={preview.label} onError={() => setPreviewFailed(true)} />}
       </dialog>
     </section>
   );

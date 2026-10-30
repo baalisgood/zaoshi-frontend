@@ -1,7 +1,0 @@
-import test from 'node:test';import assert from 'node:assert/strict';
-globalThis.window=globalThis;globalThis.location={origin:'http://127.0.0.1:3141'};const store=new Map();globalThis.localStorage={getItem:key=>store.get(key)??null,setItem:(key,value)=>store.set(key,value)};
-await import('../src/mock.ts');
-test('mock fails closed and provides synthetic identity',async()=>{assert.equal((await fetch('https://example.com/api')).status,403);assert.equal((await fetch('/api/not-implemented')).status,501);assert.equal((await fetch('/api/auth/email/login',{method:'POST'})).status,400);const session=await(await fetch('/api/me')).json();assert.equal(session.user.email,'designer@example.invalid');});
-test('payment is entirely synthetic',async()=>{const created=await(await fetch('/api/recharge/orders',{method:'POST',body:JSON.stringify({productCode:'CNY20'})})).json();assert.equal(created.order.codeUrl,'DEMO-NOT-A-PAYMENT-CODE');assert.equal(created.order.status,'PENDING');localStorage.setItem('demo-paid','yes');const paid=await(await fetch('/api/recharge/orders/DEMO-ORDER')).json();assert.equal(paid.order.status,'CREDITED');});
-
-test('admin queue and recharge contracts render safely',async()=>{const body=await(await fetch('/api/admin/console?view=overview')).json();assert.deepEqual(body.queue.alerts,[]);assert.equal(body.queue.metrics.blockedObjectCleanup,0);const recharge=await(await fetch('/api/admin/recharge')).json();assert.deepEqual(recharge.records,[]);});

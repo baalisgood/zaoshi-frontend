@@ -1,0 +1,258 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786849288148,
+      "tag": "0000_overconfident_nicolaos",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786854375733,
+      "tag": "0001_noisy_wong",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787313717787,
+      "tag": "0002_advanced_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787390000000,
+      "tag": "0003_preview_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787555910357,
+      "tag": "0004_old_mindworm",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787913194433,
+      "tag": "0005_deep_gressill",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787994422069,
+      "tag": "0006_spooky_frightful_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788220800000,
+      "tag": "0007_additional_references",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788315901963,
+      "tag": "0008_nullable_generation_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788575807362,
+      "tag": "0009_cheerful_infant_terrible",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788604377186,
+      "tag": "0010_round_aaron_stack",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788618662935,
+      "tag": "0011_nebulous_angel",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789131074102,
+      "tag": "0012_loving_weapon_omega",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1789203073250,
+      "tag": "0013_volatile_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1789210428000,
+      "tag": "0014_generation_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1789218000000,
+      "tag": "0015_safe_generation_requeue",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1789221600000,
+      "tag": "0016_generation_dead_letters",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1789308000000,
+      "tag": "0017_wechat_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1789394400000,
+      "tag": "0018_generation_quotas",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1789480800000,
+      "tag": "0019_credit_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1789567200000,
+      "tag": "0020_admin_console_analytics",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1789653600000,
+      "tag": "0021_recharge_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1789740000000,
+      "tag": "0022_image_sanitization_proof",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1789826400000,
+      "tag": "0023_asset_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790081118177,
+      "tag": "0024_space_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1790081118178,
+      "tag": "0025_design_scheme",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1791020510832,
+      "tag": "0026_email_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1791200000000,
+      "tag": "0027_legal_acceptances",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1791225600028,
+      "tag": "0028_recharge_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1791225600029,
+      "tag": "0029_machine_moderation",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1791225600030,
+      "tag": "0030_output_moderation_rejections",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1791225600031,
+      "tag": "0031_email_registration_welcome",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1791225600032,
+      "tag": "0032_short_user_ids",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1792080000033,
+      "tag": "0033_prompt_optimization",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1792627200034,
+      "tag": "0034_wechat_login_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1793293311550,
+      "tag": "0035_referrals_and_generation_limits",
+      "breakpoints": true
+    }
+  ]
+}

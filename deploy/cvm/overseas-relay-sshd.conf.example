@@ -1,0 +1,15 @@
+# AWS sshd Match block. Validate with sshd -t and sshd -T before installation.
+# Keep existing administrator access; this template only restricts the relay user.
+Match User zaoshi-relay
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowTcpForwarding local
+    AllowStreamLocalForwarding no
+    PermitOpen 127.0.0.1:8080
+    MaxSessions 0
+    PermitTTY no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+# authorized_keys line also needs: from="<verified-CVM-egress-IP>",restrict,port-forwarding,permitopen="127.0.0.1:8080" <verified-public-key>

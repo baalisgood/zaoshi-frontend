@@ -1,0 +1,1 @@
+ALTER TABLE `generation_jobs` ADD `visual_realism` text DEFAULT 'photorealistic' NOT NULL;

@@ -1,0 +1,29 @@
+# Offline template. Replace the verified AWS SSH IP and pin its host key.
+# Persistent socket directory: real 10001:10001, mode 0700. No RuntimeDirectory.
+# Prepare a locked nologin host user/group with numeric UID/GID 10001.
+# Host key/private key stay on CVM; the service gets a read-only namespace bind.
+# Preserve root-only /etc/zaoshi permissions; consumer never mounts SSH files.
+[Unit]
+Description=Zaoshi fixed Sub2API SSH socket forwarding
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=10001
+Group=10001
+Environment=ZAOSHI_RELAY_SSH_HOST=replace-with-verified-aws-ip
+ExecStart=/usr/bin/ssh -F /dev/null -NT -a -x -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/zaoshi-relay-ssh/known_hosts -o ExitOnForwardFailure=yes -o ConnectTimeout=8 -o ConnectionAttempts=1 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StreamLocalBindMask=0177 -o StreamLocalBindUnlink=yes -i /run/zaoshi-relay-ssh/id_ed25519 -L /var/lib/zaoshi/overseas-sockets/sub2api.sock:127.0.0.1:8080 zaoshi-relay@${ZAOSHI_RELAY_SSH_HOST}
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+BindReadOnlyPaths=/etc/zaoshi/relay:/run/zaoshi-relay-ssh
+ReadWritePaths=/var/lib/zaoshi/overseas-sockets
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

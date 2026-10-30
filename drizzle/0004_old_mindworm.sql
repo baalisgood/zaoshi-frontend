@@ -1,0 +1,2 @@
+ALTER TABLE `generation_jobs` ADD `custom_prompt` text;--> statement-breakpoint
+CREATE INDEX `idx_generation_jobs_owner_workflow_created` ON `generation_jobs` (`owner_id`,`workflow_type`,`created_at`,`id`);

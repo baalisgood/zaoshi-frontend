@@ -103,6 +103,24 @@ export function AppShell({ children }: { children: React.ReactNode; initialEmail
     };
   }, [drawerOpen, path]);
 
+  useLayoutEffect(() => {
+    if (!drawerOpen) return;
+    const place = () => {
+      const avatar = avatarButton.current?.getBoundingClientRect();
+      const panel = drawer.current;
+      const layer = panel?.parentElement?.getBoundingClientRect();
+      if (!avatar || !panel || !layer) return;
+      const right = Math.max(12, Math.min(layer.right - avatar.left - avatar.width / 2, layer.width - panel.offsetWidth - 12));
+      panel.style.right = `${right}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    if (header.current) observer.observe(header.current);
+    if (drawer.current) observer.observe(drawer.current);
+    window.addEventListener("resize", place);
+    return () => { observer.disconnect(); window.removeEventListener("resize", place); };
+  }, [drawerOpen]);
+
   useEffect(() => {
     if (!drawerOpen) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { setDrawerOpen(false); avatarButton.current?.focus(); } };
@@ -141,9 +159,9 @@ export function AppShell({ children }: { children: React.ReactNode; initialEmail
             ))}
           </nav>
           <div className="header-actions">
-            <div className="header-account-slot">{account?.user.authenticated ? <a className="header-balance" href="/products#recharge" aria-label="积分余额与充值">{account.credits ? `${account.credits.available} 积分` : "余额暂不可用"}</a> : <><a className="header-auth-link" href="/login">登录</a><a className="header-auth-link" href="/login?mode=register">注册</a></>}</div>
-            <button ref={avatarButton} className="account-avatar-button" type="button" aria-label="打开个人资料" aria-haspopup="dialog" aria-expanded={drawerOpen} aria-controls="account-popover" onPointerEnter={hoverOpen} onPointerLeave={hoverClose} onClick={() => { clearTimeout(hoverTimer.current); setHeaderHidden(false); if (openedByHover.current) setDrawerOpen(true); else setDrawerOpen(open => !open); openedByHover.current = false; }} onKeyDown={event => { if (event.key === "ArrowDown") { event.preventDefault(); setDrawerOpen(true); requestAnimationFrame(() => closeButton.current?.focus()); } }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" /></svg>
+            <div className="header-account-slot">{account?.user.authenticated ? <a className="header-balance" href="/products#recharge" aria-label={account.credits ? `可用 ${account.credits.available} 积分，前往充值` : "积分余额与充值"}><span className="header-coin" aria-hidden="true" />{account.credits ? <span className="header-balance-value">{account.credits.available.toLocaleString("zh-CN")}</span> : <span className="header-balance-value">余额暂不可用</span>}<em>充值</em></a> : <><a className="header-auth-link is-ghost" href="/login">登录</a><a className="header-auth-link is-primary" href="/login?mode=register">注册</a></>}</div>
+            <button ref={avatarButton} className={`account-avatar-button${account?.user.authenticated && account.user.displayName ? " has-initial" : ""}`} type="button" aria-label="打开个人资料" aria-haspopup="dialog" aria-expanded={drawerOpen} aria-controls="account-popover" onPointerEnter={hoverOpen} onPointerLeave={hoverClose} onClick={() => { clearTimeout(hoverTimer.current); setHeaderHidden(false); if (openedByHover.current) setDrawerOpen(true); else setDrawerOpen(open => !open); openedByHover.current = false; }} onKeyDown={event => { if (event.key === "ArrowDown") { event.preventDefault(); setDrawerOpen(true); requestAnimationFrame(() => closeButton.current?.focus()); } }}>
+              {account?.user.authenticated && account.user.displayName ? <span className="account-avatar-initial" aria-hidden="true">{account.user.displayName.slice(0, 1)}</span> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="12" cy="7.5" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" /></svg>}
             </button>
           </div>
         </div>
@@ -154,7 +172,7 @@ export function AppShell({ children }: { children: React.ReactNode; initialEmail
         <div className="account-popover-layer">
           <aside id="account-popover" ref={drawer} className="account-popover account-drawer" role="dialog" aria-label="个人资料" data-ui onPointerEnter={hoverOpen} onPointerLeave={hoverClose}>
             <button ref={closeButton} className="icon-close account-menu-close" type="button" aria-label="关闭个人资料" onClick={() => { setDrawerOpen(false); avatarButton.current?.focus(); }}>×</button>
-            <ProfileView compact appearance={<div className="account-menu-appearance"><span>外观</span><div role="group" aria-label="选择外观"><button type="button" aria-pressed={theme === "light"} onClick={() => { if (theme !== "light") toggleTheme(); }}>浅色</button><button type="button" aria-pressed={theme === "dark"} onClick={() => { if (theme !== "dark") toggleTheme(); }}>深色</button></div></div>} />
+            <ProfileView compact appearance={<div className="account-menu-appearance"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4" /></svg>外观</span><div role="group" aria-label="选择外观"><button type="button" aria-pressed={theme === "light"} onClick={() => { if (theme !== "light") toggleTheme(); }}>浅色</button><button type="button" aria-pressed={theme === "dark"} onClick={() => { if (theme !== "dark") toggleTheme(); }}>深色</button></div></div>} />
           </aside>
         </div>
       )}

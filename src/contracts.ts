@@ -1,1 +1,0 @@
-export type NativeOrder={id:string;ownerId:string;productCode:string;catalogVersion:string;amountFen:number;credits:number;status:string;createdAt:number;expiresAt:number;paidAt:number|null;codeUrl:string|null;reconciliation:boolean};

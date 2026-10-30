@@ -230,17 +230,17 @@ function savePending(key: string, value: PendingSubmit) { try { localStorage.set
 function clearPending(key: string) { try { localStorage.removeItem(`${PENDING_PREFIX}${key}`); } catch { /* The accepted server task remains authoritative. */ } }
 export function requiresFreshPaidConfirmation(_confirmedAt: number | undefined, privateTest: boolean): boolean { return privateTest; }
 export function shouldRecoverPendingSubmissions(origin: string, responseOk: boolean, authMode?: string): boolean {
-  return origin !== "/demo/scene.svg" && responseOk && (authMode === "demo" || authMode === "wechat");
+  return origin !== "http://127.0.0.1:3000" && responseOk && (authMode === "demo" || authMode === "wechat");
 }
 
 export async function privateTestModeForSubmission(origin: string, confirmedAt: number | undefined, fetchMe: typeof fetch = fetch): Promise<boolean> {
-  if (confirmedAt && origin !== "/demo/scene.svg") return false;
+  if (confirmedAt && origin !== "http://127.0.0.1:3000") return false;
   try {
     const response = await fetchMe("/api/me", { cache: "no-store" });
     if (!response.ok) throw new Error("Mode unavailable");
     return (await response.json() as { authMode?: string }).authMode === "private-test";
   } catch {
-    if (origin === "/demo/scene.svg") throw new Error("无法确认 SSH 私测状态；为避免重复付费，本次提交已停止。");
+    if (origin === "http://127.0.0.1:3000") throw new Error("无法确认 SSH 私测状态；为避免重复付费，本次提交已停止。");
     return false;
   }
 }

@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("CVM backup requires offline writers and preserves SQLite WAL plus objects", async () => {
+  const script = await readFile("deploy/cvm/backup-safe.sh", "utf8");
+  assert.match(script, /\^\[0-9a-f\]\{40\}\$/u);
+  assert.match(script, /container_running zaoshi-web/u);
+  assert.match(script, /container_running zaoshi-generation-consumer/u);
+  assert.match(script, /installed_web_image[\s\S]*!= "\$image"/u);
+  assert.match(script, /installed_web_image_id[\s\S]*tagged_web_image_id/u);
+  assert.match(script, /set -o noclobber; : > "\$consumer_lock"/u);
+  assert.match(script, /chown --no-dereference 10001:10001 "\$consumer_lock"/u);
+  assert.match(script, /stat -c '%u:%g:%h' "\$consumer_lock"/u);
+  assert.match(script, /chmod 0600 "\$consumer_lock"/u);
+  assert.match(script, /stat -c '%u:%g:%h' "\$web_lock"/u);
+  assert.match(script, /chmod 0600 "\$web_lock"/u);
+  assert.ok(script.indexOf('stat -c \'%u:%g:%a\' "$consumer_dir"') < script.indexOf("set -o noclobber"));
+  assert.match(script, /exec 9<>"\$web_lock"[\s\S]*flock --nonblock 9/u);
+  assert.match(script, /exec 8<>"\$consumer_lock"[\s\S]*flock --nonblock 8/u);
+  assert.match(script, /find "\$database_dir" "\$object_dir" -xdev -type l/u);
+  assert.match(script, /cp -a --reflink=auto "\$database_dir" "\$backup_dir\/db"/u);
+  assert.match(script, /cp -a --reflink=auto "\$object_dir" "\$backup_dir\/objects"/u);
+  assert.match(script, /PRAGMA integrity_check/u);
+  assert.match(script, /PRAGMA foreign_key_check/u);
+  assert.match(script, /PRAGMA query_only=ON/u);
+  assert.match(script, /--network none/u);
+  assert.match(script, /--read-only --user 10001:10001/u);
+  assert.match(script, /"\$tagged_web_image_id" -e/u);
+  assert.doesNotMatch(script, /dst=\/backup\/db,readonly/u);
+  assert.doesNotMatch(script, /rm\s+-rf|docker\s+start|docker\s+compose\s+up/u);
+  assert.ok(script.indexOf("flock --nonblock 8") < script.indexOf("cp -a --reflink=auto"));
+});

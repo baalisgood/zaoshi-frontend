@@ -1,0 +1,2081 @@
+diff --git a/backend/internal/handler/gemini_v1beta_handler.go b/backend/internal/handler/gemini_v1beta_handler.go
+index 4e56c37..6f54f0c 100644
+--- a/backend/internal/handler/gemini_v1beta_handler.go
++++ b/backend/internal/handler/gemini_v1beta_handler.go
+@@ -11,6 +11,7 @@ import (
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/Wei-Shaw/sub2api/internal/domain"
+ 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+@@ -281,6 +282,7 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
+ // POST /v1beta/models/{model}:generateContent
+ // POST /v1beta/models/{model}:streamGenerateContent?alt=sse
+ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
++	requestStart := time.Now()
+ 	apiKey, ok := middleware.GetAPIKeyFromContext(c)
+ 	if !ok || apiKey == nil {
+ 		googleError(c, http.StatusUnauthorized, "Invalid API key")
+@@ -318,7 +320,28 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+ 		googleError(c, http.StatusBadRequest, "Invalid model in URL")
+ 		return
+ 	}
++	if service.ZaoshiImageModelVariant(modelName) {
++		googleError(c, http.StatusBadRequest, "Exact official image model required")
++		return
++	}
++	if service.ZaoshiImagePlatform(modelName) == service.PlatformGemini {
++		if action != "generateContent" || c.Request.URL.RawQuery != "" {
++			googleError(c, http.StatusBadRequest, "Only synchronous image generateContent is allowed")
++			return
++		}
++		ctx, err := zaoshiImageContext(c, modelName, requestStart, apiKey.GroupID)
++		if err != nil {
++			googleError(c, http.StatusBadRequest, err.Error())
++			return
++		}
++		c.Request = c.Request.WithContext(ctx)
++		defer recordZaoshiImageTerminal(c, requestStart)
++	}
+ 	if resolvedModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok && strings.TrimSpace(resolvedModel) != "" {
++		if budget := service.ZaoshiImageBudgetFromContext(c.Request.Context()); budget != nil && strings.TrimSpace(resolvedModel) != budget.Model {
++			googleError(c, http.StatusBadRequest, "Image model rewrite forbidden")
++			return
++		}
+ 		modelName = strings.TrimSpace(resolvedModel)
+ 	}
+ 
+@@ -338,6 +361,17 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+ 		googleError(c, http.StatusBadRequest, "Request body is empty")
+ 		return
+ 	}
++	if service.ZaoshiImageBudgetFromContext(c.Request.Context()) != nil {
++		var imageRequest struct {
++			GenerationConfig struct {
++				CandidateCount int `json:"candidateCount"`
++			} `json:"generationConfig"`
++		}
++		if json.Unmarshal(body, &imageRequest) != nil || imageRequest.GenerationConfig.CandidateCount != 1 {
++			googleError(c, http.StatusBadRequest, "Exactly one image candidate is required")
++			return
++		}
++	}
+ 
+ 	setOpsRequestContext(c, modelName, stream)
+ 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(stream, false)))
+@@ -353,6 +387,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+ 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, modelName)
+ 	reqModel := modelName // 保存映射前的原始模型名
+ 	if channelMapping.Mapped {
++		if budget := service.ZaoshiImageBudgetFromContext(c.Request.Context()); budget != nil && channelMapping.MappedModel != budget.Model {
++			googleError(c, http.StatusBadRequest, "Image model rewrite forbidden")
++			return
++		}
+ 		modelName = channelMapping.MappedModel
+ 	}
+ 
+@@ -658,7 +696,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+ 			requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
+ 		}
+ 		sessionGroupID := derefGroupID(apiKey.GroupID)
+-		if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
++		if budget := service.ZaoshiImageBudgetFromContext(requestCtx); budget != nil && budget.ValidateAccount(account, modelName) != nil {
++			googleError(c, http.StatusBadGateway, "Image request requires an unmodified official API key account")
++			err = errors.New("zaoshi image account forbidden")
++		} else if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+ 			result, err = h.antigravityGatewayService.ForwardGemini(
+ 				requestCtx,
+ 				c,
+@@ -679,6 +720,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+ 		if err != nil {
+ 			var failoverErr *service.UpstreamFailoverError
+ 			if errors.As(err, &failoverErr) {
++				if service.ZaoshiImageBudgetFromContext(requestCtx) != nil {
++					h.handleGeminiFailoverExhausted(c, failoverErr)
++					return
++				}
+ 				failoverAction := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, account.GetPoolModeRetryCount(), failoverErr)
+ 				switch failoverAction {
+ 				case FailoverContinue:
+@@ -725,7 +770,11 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
+ 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
+ 		sessionID := service.ExtractClientSessionID(c)
+ 		// 长上下文阶梯由目录数据驱动，统一在计费路径内生效，入口无需声明。
+-		h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
++		submitUsage := h.submitUsageRecordTask
++		if service.ZaoshiImageBudgetFromContext(c.Request.Context()) != nil {
++			submitUsage = h.submitMandatoryUsageRecordTask
++		}
++		submitUsage(c.Request.Context(), func(ctx context.Context) {
+ 			if err := h.gatewayService.RecordUsage(ctx, &service.RecordUsageInput{
+ 				Result:             result,
+ 				QuotaPlatform:      quotaPlatform,
+diff --git a/backend/internal/handler/openai_gateway_handler.go b/backend/internal/handler/openai_gateway_handler.go
+index 6214aac..0edd735 100644
+--- a/backend/internal/handler/openai_gateway_handler.go
++++ b/backend/internal/handler/openai_gateway_handler.go
+@@ -255,7 +255,7 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
+ 	if requestID, _ := parent.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
+ 		base = context.WithValue(base, ctxkey.RequestID, strings.TrimSpace(requestID))
+ 	}
+-	return base
++	return service.CopyZaoshiImageBudget(parent, base)
+ }
+ 
+ // wrapUsageRecordTaskContext 包装计费任务：复制请求级 context 值，并接管请求的在途余额预留引用。
+diff --git a/backend/internal/handler/openai_images.go b/backend/internal/handler/openai_images.go
+index beda748..e50ce0f 100644
+--- a/backend/internal/handler/openai_images.go
++++ b/backend/internal/handler/openai_images.go
+@@ -74,12 +74,33 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
+ 		return
+ 	}
+ 	requestModel := parsed.Model
++	if service.ZaoshiImageModelVariant(requestModel) {
++		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Exact official image model required")
++		return
++	}
++	if service.ZaoshiImagePlatform(requestModel) == service.PlatformOpenAI {
++		if parsed.Stream || parsed.N != 1 {
++			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Only one synchronous image is allowed")
++			return
++		}
++		ctx, err := zaoshiImageContext(c, requestModel, requestStart, apiKey.GroupID)
++		if err != nil {
++			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
++			return
++		}
++		c.Request = c.Request.WithContext(ctx)
++		defer recordZaoshiImageTerminal(c, requestStart)
++	}
+ 	ensureCompositeTargetPlatform(c, apiKey, requestModel)
+ 	clientRequestModel := clientRequestedModel(c, requestModel)
+ 	routingModel := requestModel
+ 	if resolvedModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok {
+ 		routingModel = resolvedModel
+ 	}
++	if service.ZaoshiImageBudgetFromContext(c.Request.Context()) != nil && routingModel != requestModel {
++		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Image model rewrite forbidden")
++		return
++	}
+ 	if !compositeTargetPlatformAllowed(c, apiKey, requestModel, service.PlatformOpenAI) {
+ 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+ 		return
+@@ -248,7 +269,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
+ 		}
+ 
+ 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+-		if !parsed.Stream && !jsonKeepaliveStarted {
++		if service.ZaoshiImageBudgetFromContext(requestCtx) == nil && !parsed.Stream && !jsonKeepaliveStarted {
+ 			stopJSONKeepalive = service.StartOpenAIImagesJSONKeepalive(c, h.openAIImagesJSONKeepaliveInterval())
+ 			jsonKeepaliveStarted = true
+ 		}
+@@ -303,6 +324,10 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
+ 				}
+ 				var failoverErr *service.UpstreamFailoverError
+ 				if errors.As(err, &failoverErr) {
++					if service.ZaoshiImageBudgetFromContext(requestCtx) != nil {
++						h.handleFailoverExhausted(c, failoverErr, streamStarted)
++						return
++					}
+ 					h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestModel, false, result), false, nil, err)
+ 					if service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
+ 						reqLog.Warn("openai.images.upstream_failover_skipped_after_flush",
+diff --git a/backend/internal/handler/openai_images_controls_test.go b/backend/internal/handler/openai_images_controls_test.go
+index cebccca..7d2d7ba 100644
+--- a/backend/internal/handler/openai_images_controls_test.go
++++ b/backend/internal/handler/openai_images_controls_test.go
+@@ -19,6 +19,7 @@ func TestOpenAIGatewayHandlerImages_DisabledGroupRejectsBeforeScheduling(t *test
+ 	body := []byte(`{"model":"gpt-image-2","prompt":"draw","size":"1024x1024"}`)
+ 	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body))
+ 	req.Header.Set("Content-Type", "application/json")
++	req.Header.Set("X-Request-ID","attempt_12345678-1234-1234-1234-123456789012")
+ 	rec := httptest.NewRecorder()
+ 	c, _ := gin.CreateTestContext(rec)
+ 	c.Request = req
+diff --git a/backend/internal/handler/zaoshi_image_guard.go b/backend/internal/handler/zaoshi_image_guard.go
+new file mode 100644
+index 0000000..468cca0
+--- /dev/null
++++ b/backend/internal/handler/zaoshi_image_guard.go
+@@ -0,0 +1,47 @@
++package handler
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"regexp"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++	"github.com/gin-gonic/gin"
++	"go.uber.org/zap"
++)
++
++var zaoshiAttemptID = regexp.MustCompile(`^attempt_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
++
++func zaoshiImageContext(c *gin.Context, model string, started time.Time, groupID *int64) (context.Context, error) {
++	if groupID == nil || *groupID <= 0 {
++		return nil, errors.New("Grouped image gateway key required")
++	}
++	id := c.GetHeader("X-Request-ID")
++	if !zaoshiAttemptID.MatchString(id) {
++		return nil, errors.New("Internal image attempt ID required")
++	}
++	ctx := context.WithValue(c.Request.Context(), ctxkey.ClientRequestID, id)
++	ctx = service.WithZaoshiImageBudget(ctx, model, started, func(providerID string) { c.Header(service.ZaoshiProviderRequestIDHeader, providerID) })
++	service.ZaoshiImageBudgetFromContext(ctx).GroupID = *groupID
++	service.ZaoshiImageBudgetFromContext(ctx).OnResponseHeaders = func(status int, header http.Header) {
++		c.Header("Content-Type", "application/json")
++		c.Status(status)
++		c.Writer.Flush()
++	}
++	return ctx, nil
++}
++
++// A bounded terminal audit line survives LOG_LEVEL=error, including body
++// failures without a usage row. It never records request/response payloads.
++func recordZaoshiImageTerminal(c *gin.Context, started time.Time) {
++	budget := service.ZaoshiImageBudgetFromContext(c.Request.Context())
++	if budget == nil {
++		return
++	}
++	id, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string)
++	logger.L().Error("zaoshi.image_terminal", zap.String("attempt_id", id), zap.String("provider_request_id", budget.ProviderRequestID()), zap.Bool("budget_claimed", budget.Sent()), zap.String("body_outcome", budget.BodyOutcome()), zap.Int("http_status", c.Writer.Status()), zap.Int64("duration_ms", time.Since(started).Milliseconds()))
++}
+diff --git a/backend/internal/handler/zaoshi_image_handler_test.go b/backend/internal/handler/zaoshi_image_handler_test.go
+new file mode 100644
+index 0000000..a3b0766
+--- /dev/null
++++ b/backend/internal/handler/zaoshi_image_handler_test.go
+@@ -0,0 +1,354 @@
++//go:build unit
++
++package handler
++
++import (
++	"bytes"
++	"context"
++	"github.com/Wei-Shaw/sub2api/internal/config"
++	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
++	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++const zaoshiTestAttempt = "attempt_12345678-1234-1234-1234-123456789012"
++
++type zaoshiGeminiRepo struct {
++	openAIImagesFailoverAccountRepo
++}
++
++func (zaoshiGeminiRepo) SetRateLimited(context.Context, int64, time.Time) error { return nil }
++func (zaoshiGeminiRepo) SetOverloaded(context.Context, int64, time.Time) error  { return nil }
++func (zaoshiGeminiRepo) SetModelRateLimit(context.Context, int64, string, time.Time, ...string) error {
++	return nil
++}
++
++type zaoshiWireUpstream struct {
++	service.HTTPUpstream
++	endpoint string
++	calls    atomic.Int32
++	budget   *service.ZaoshiImageBudget
++}
++
++func (u *zaoshiWireUpstream) Do(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
++	u.calls.Add(1)
++	budget := service.ZaoshiImageBudgetFromContext(req.Context())
++	if u.budget != nil && u.budget != budget {
++		panic("budget recreated")
++	}
++	u.budget = budget
++	if err := budget.Claim(req, proxy); err != nil {
++		return nil, err
++	}
++	routed := req.Clone(req.Context())
++	routed.URL, _ = url.Parse(u.endpoint)
++	routed.Host = ""
++	routed.GetBody = nil
++	routed.Close = true
++	resp, err := http.DefaultClient.Do(routed)
++	if err == nil {
++		budget.ObserveResponseHeaders(resp.StatusCode, resp.Header)
++	}
++	return resp, err
++}
++func TestZaoshiOpenAIHandlerFailureHasOneWirePOST(t *testing.T) {
++	for _, status := range []int{429, 500} {
++		t.Run(http.StatusText(status), func(t *testing.T) {
++			gin.SetMode(gin.TestMode)
++			groupID := int64(3130)
++			accounts := []service.Account{}
++			for i := int64(1); i <= 2; i++ {
++				accounts = append(accounts, service.Account{ID: i, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Priority: int(i), Credentials: map[string]any{"api_key": "fake-only"}, GroupIDs: []int64{groupID}})
++			}
++			accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
++			var posts atomic.Int32
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				posts.Add(1)
++				w.Header().Set("X-Request-ID", "real-handler-id")
++				w.WriteHeader(status)
++				_, _ = w.Write([]byte(`{"error":{"message":"test failure"}}`))
++			}))
++			defer server.Close()
++			upstream := &zaoshiWireUpstream{endpoint: server.URL}
++			cfg := &config.Config{RunMode: config.RunModeSimple}
++			gatewayService := service.NewOpenAIGatewayService(
++				accountRepo,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++				cfg,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++				upstream,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++				nil,
++			)
++			billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
++			t.Cleanup(billingService.Stop)
++			concurrencyService := service.NewConcurrencyService(nil)
++			handler := NewOpenAIGatewayHandler(
++				gatewayService,
++				concurrencyService,
++				billingService,
++				service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg),
++				nil,
++				nil,
++				nil,
++				nil,
++				cfg,
++			)
++			handler.maxAccountSwitches = 10
++			req := httptest.NewRequest("POST", "/v1/images/generations", bytes.NewBufferString(`{"model":"gpt-image-2","prompt":"test","n":1,"size":"1024x1024"}`))
++			req.Header.Set("Content-Type", "application/json")
++			req.Header.Set("X-Request-ID", zaoshiTestAttempt)
++			rec := httptest.NewRecorder()
++			c, _ := gin.CreateTestContext(rec)
++			c.Request = req
++			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 99, GroupID: &groupID, Group: &service.Group{ID: groupID, AllowImageGeneration: true}, User: &service.User{ID: 100}})
++			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100, Concurrency: 0})
++			handler.Images(c)
++			require.Equal(t, int32(1), posts.Load())
++			require.Equal(t, int32(1), upstream.calls.Load())
++			require.NotNil(t, upstream.budget)
++			require.Equal(t, "real-handler-id", rec.Header().Get(service.ZaoshiProviderRequestIDHeader))
++			require.Equal(t, zaoshiTestAttempt, c.Request.Context().Value(ctxkey.ClientRequestID))
++		})
++	}
++}
++func TestZaoshiGeminiHandlerFailureAndCandidateLimit(t *testing.T) {
++	for _, candidateCount := range []int{1, 2} {
++		for _, status := range []int{429, 500} {
++			t.Run(http.StatusText(status)+string(rune('0'+candidateCount)), func(t *testing.T) {
++				gin.SetMode(gin.TestMode)
++
++				var posts atomic.Int32
++				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++					posts.Add(1)
++					w.Header().Set("X-Request-ID", "real-google-id")
++					w.WriteHeader(status)
++					_, _ = w.Write([]byte(`{"error":{"message":"test failure"}}`))
++				}))
++				defer server.Close()
++				upstream := &zaoshiWireUpstream{endpoint: server.URL}
++				h, group := newZaoshiGeminiWireHandler(t, upstream)
++				groupID := group.ID
++				router := gin.New()
++				router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
++					c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 9202, UserID: 9203, GroupID: &groupID, Group: group, Status: service.StatusActive, User: &service.User{ID: 9203, Concurrency: 10, Balance: 100}})
++					c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 9203, Concurrency: 10})
++					h.GeminiV1BetaModels(c)
++				})
++				body := `{"contents":[{"parts":[{"text":"test"}]}],"generationConfig":{"candidateCount":` + string(rune('0'+candidateCount)) + `}}`
++				req := httptest.NewRequest("POST", "/v1beta/models/gemini-3-pro-image:generateContent", bytes.NewBufferString(body))
++				req = req.WithContext(context.WithValue(context.Background(), ctxkey.Group, group))
++				req.Header.Set("Content-Type", "application/json")
++				req.Header.Set("X-Request-ID", zaoshiTestAttempt)
++				rec := httptest.NewRecorder()
++				router.ServeHTTP(rec, req)
++				if candidateCount == 2 {
++					require.Equal(t, 400, rec.Code)
++					require.Zero(t, posts.Load())
++					require.Zero(t, upstream.calls.Load())
++				} else {
++					require.Equal(t, int32(1), posts.Load())
++					require.Equal(t, int32(1), upstream.calls.Load())
++					require.Equal(t, "real-google-id", rec.Header().Get(service.ZaoshiProviderRequestIDHeader))
++				}
++			})
++		}
++	}
++}
++
++func newZaoshiOpenAIWireHandler(t *testing.T, upstream *zaoshiWireUpstream, accountTypes ...string) *OpenAIGatewayHandler {
++	groupID := int64(3130)
++	accountRepo := openAIImagesFailoverAccountRepo{accounts: []service.Account{{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Credentials: map[string]any{"api_key": "fake-only"}, GroupIDs: []int64{groupID}}}}
++	if len(accountTypes) > 0 {
++		accountRepo.accounts[0].Type = accountTypes[0]
++		accountRepo.accounts[0].Credentials = map[string]any{"access_token": "fake-only", "chatgpt_account_id": "fake-account"}
++	}
++	cfg := &config.Config{RunMode: config.RunModeSimple}
++	gatewayService := service.NewOpenAIGatewayService(
++		accountRepo,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++		cfg,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++		upstream,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++		nil,
++	)
++	billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
++	t.Cleanup(billingService.Stop)
++	concurrencyService := service.NewConcurrencyService(nil)
++	handler := NewOpenAIGatewayHandler(
++		gatewayService,
++		concurrencyService,
++		billingService,
++		service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg),
++		nil,
++		nil,
++		nil,
++		nil,
++		cfg,
++	)
++	handler.maxAccountSwitches = 10
++	return handler
++}
++
++func TestZaoshiModelVariantsRejectBeforeWire(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, model := range []string{"GPT-IMAGE-2", "gpt-image-2-thinking"} {
++		upstream := &zaoshiWireUpstream{}
++		h := newZaoshiOpenAIWireHandler(t, upstream)
++		req := httptest.NewRequest("POST", "/v1/images/generations", bytes.NewBufferString(`{"model":"`+model+`","prompt":"test","n":1}`))
++		req.Header.Set("Content-Type", "application/json")
++		req.Header.Set("X-Request-ID", zaoshiTestAttempt)
++		rec := httptest.NewRecorder()
++		c, _ := gin.CreateTestContext(rec)
++		c.Request = req
++		groupID := int64(3130)
++		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 99, GroupID: &groupID, Group: &service.Group{ID: groupID, AllowImageGeneration: true}, User: &service.User{ID: 100}})
++		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100})
++		h.Images(c)
++		require.Equal(t, 400, rec.Code)
++		require.Zero(t, upstream.calls.Load())
++	}
++	for _, model := range []string{"GEMINI-3-PRO-IMAGE", "gemini-3-pro-image-thinking"} {
++		router := gin.New()
++		groupID := int64(9200)
++		h := &GatewayHandler{}
++		router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
++			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 1, GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformGemini}, User: &service.User{ID: 100}})
++			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100})
++			h.GeminiV1BetaModels(c)
++		})
++		req := httptest.NewRequest("POST", "/v1beta/models/"+model+":generateContent", bytes.NewBufferString(`{"generationConfig":{"candidateCount":2}}`))
++		req.Header.Set("X-Request-ID", zaoshiTestAttempt)
++		rec := httptest.NewRecorder()
++		router.ServeHTTP(rec, req)
++		require.Equal(t, 400, rec.Code)
++	}
++}
++
++func newZaoshiGeminiWireHandler(t *testing.T, upstream *zaoshiWireUpstream) (*GatewayHandler, *service.Group) {
++	t.Helper()
++	groupID := int64(9200)
++	group := &service.Group{ID: groupID, Hydrated: true, Platform: service.PlatformGemini, Status: service.StatusActive}
++	accounts := []*service.Account{}
++	for i := int64(1); i <= 2; i++ {
++		accounts = append(accounts, &service.Account{ID: i, Platform: service.PlatformGemini, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"api_key": "fake-only"}, Status: service.StatusActive, Schedulable: true, Concurrency: 1, Priority: int(i), GroupIDs: []int64{groupID}, AccountGroups: []service.AccountGroup{{AccountID: i, GroupID: groupID}}})
++	}
++	h, cleanup := newTestGatewayHandler(t, group, accounts)
++	t.Cleanup(cleanup)
++	values := []service.Account{}
++	for _, account := range accounts {
++		values = append(values, *account)
++	}
++	h.gatewayService = service.NewGatewayService(
++		openAIImagesFailoverAccountRepo{accounts: values}, // exact group query fixture
++		&fakeGroupRepo{group: group},
++		nil, // usageLogRepo
++		nil, // usageBillingRepo
++		nil, // userRepo
++		nil, // userSubRepo
++		nil, // userGroupRateRepo
++		nil, // cache (disable sticky)
++		nil, // cfg
++		nil,
++		nil, // concurrencyService (disable load-aware; tryAcquire always acquired)
++		nil, // billingService
++		nil, // rateLimitService
++		nil, // billingCacheService
++		nil, // identityService
++		nil, // httpUpstream
++		nil, // deferredService
++		nil, // claudeTokenProvider
++		nil, // sessionLimitCache
++		nil, // rpmCache
++		nil, // digestStore
++		nil, // settingService
++		nil, // tlsFPProfileService
++		nil, // channelService
++		nil, // resolver
++		nil, // compositeResolver
++		nil, // balanceNotifyService
++		nil, // userPlatformQuotaRepo
++	)
++
++	h.geminiCompatService = service.NewGeminiMessagesCompatService(zaoshiGeminiRepo{openAIImagesFailoverAccountRepo{accounts: values}}, nil, nil, nil, nil, nil, upstream, nil, &config.Config{})
++	return h, group
++}
++
++func TestZaoshiOAuthHandlerSinglePOST(t *testing.T) {
++	for _, status := range []int{200, 401, 404, 405, 429, 500} {
++		t.Run(http.StatusText(status), func(t *testing.T) {
++			var posts atomic.Int32
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				posts.Add(1)
++				require.Equal(t, "Bearer fake-only", r.Header.Get("Authorization"))
++				w.Header().Set("X-Request-ID", "real-oauth-id")
++				w.Header().Set("Content-Type", "application/json")
++				w.WriteHeader(status)
++				if status == 200 {
++					_, _ = w.Write([]byte(`{"data":[{"b64_json":"aGVsbG8=","model":"real-model"}]}`))
++				} else {
++					_, _ = w.Write([]byte(`{"error":{"message":"rejected"}}`))
++				}
++			}))
++			defer server.Close()
++			upstream := &zaoshiWireUpstream{endpoint: server.URL}
++			h := newZaoshiOpenAIWireHandler(t, upstream, service.AccountTypeOAuth)
++			req := httptest.NewRequest("POST", "/v1/images/generations", bytes.NewBufferString(`{"model":"gpt-image-2","prompt":"test","n":1,"output_format":"jpeg"}`))
++			req.Header.Set("Content-Type", "application/json")
++			req.Header.Set("X-Request-ID", zaoshiTestAttempt)
++			rec := httptest.NewRecorder()
++			c, _ := gin.CreateTestContext(rec)
++			c.Request = req
++			groupID := int64(3130)
++			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{ID: 99, GroupID: &groupID, Group: &service.Group{ID: groupID, AllowImageGeneration: true}, User: &service.User{ID: 100}})
++			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100})
++			h.Images(c)
++			require.Equal(t, status, rec.Code)
++			require.Equal(t, int32(1), posts.Load())
++			require.Equal(t, int32(1), upstream.calls.Load())
++			require.Equal(t, "real-oauth-id", rec.Header().Get(service.ZaoshiProviderRequestIDHeader))
++			if status == 200 {
++				require.Contains(t, rec.Body.String(), `"model":"real-model"`)
++			}
++		})
++	}
++}
+diff --git a/backend/internal/handler/zaoshi_image_website_test.go b/backend/internal/handler/zaoshi_image_website_test.go
+new file mode 100644
+index 0000000..91e211b
+--- /dev/null
++++ b/backend/internal/handler/zaoshi_image_website_test.go
+@@ -0,0 +1,107 @@
++//go:build unit && zaoshi_integration
++
++package handler
++
++import (
++	"context"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
++	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
++	"github.com/Wei-Shaw/sub2api/internal/service"
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++)
++
++// This test crosses the real website transport, Unix HTTP, Gin handler,
++// API-key service path and a counting local upstream. TLS/ALPN is tested in
++// repository.TestZaoshiImageSingleWirePOST with the production transport.
++func TestZaoshiGatewayWebsiteBodyFailure(t *testing.T) {
++	website := os.Getenv("ZAOSHI_WEBSITE_SOURCE")
++	require.NotEmpty(t, website)
++	for _, test := range []struct{ provider, scenario string }{
++		{"openai-oauth", "stalled"}, {"openai-oauth", "invalid"}, {"openai-oauth", "oversize"}, {"openai-oauth", "truncated"}, {"openai", "stalled"}, {"openai", "invalid"}, {"openai", "oversize"}, {"openai", "truncated"}, {"google", "stalled"},
++	} {
++		provider, scenario := test.provider, test.scenario
++		t.Run(provider+"/"+scenario, func(t *testing.T) {
++			var posts atomic.Int32
++			upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				posts.Add(1)
++				w.Header().Set("X-Request-ID", "actual-chain-id")
++				w.Header().Set("Content-Type", "application/json")
++				if scenario == "truncated" {
++					w.Header().Set("Content-Length", "100")
++				}
++				w.WriteHeader(200)
++				w.(http.Flusher).Flush()
++				switch scenario {
++				case "stalled":
++					time.Sleep(600 * time.Millisecond)
++				case "invalid":
++					_, _ = w.Write([]byte("not-json"))
++				case "oversize":
++					_, _ = w.Write(make([]byte, 13<<20))
++				case "truncated":
++					_, _ = w.Write([]byte("{}"))
++				}
++			}))
++			defer upstreamServer.Close()
++			upstream := &zaoshiWireUpstream{endpoint: upstreamServer.URL}
++			router := gin.New()
++			if provider == "google" {
++				h, group := newZaoshiGeminiWireHandler(t, upstream)
++				router.POST("/v1beta/models/*modelAction", func(c *gin.Context) {
++					c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: 99, GroupID: &group.ID, Group: group, User: &service.User{ID: 100, Balance: 100, Concurrency: 10}})
++					c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 100, Concurrency: 10})
++					c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.Group, group))
++					h.GeminiV1BetaModels(c)
++				})
++			} else {
++				var accountTypes []string
++				if provider == "openai-oauth" {
++					accountTypes = []string{service.AccountTypeOAuth}
++				}
++				h := newZaoshiOpenAIWireHandler(t, upstream, accountTypes...)
++				router.POST("/v1/images/generations", func(c *gin.Context) {
++					groupID := int64(3130)
++					c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: 99, GroupID: &groupID, Group: &service.Group{ID: groupID, AllowImageGeneration: true}, User: &service.User{ID: 100}})
++					c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 100})
++					h.Images(c)
++				})
++			}
++			directory, err := os.MkdirTemp("/private/tmp", "zs-chain-")
++			require.NoError(t, err)
++			defer os.RemoveAll(directory)
++			socket := filepath.Join(directory, "gateway.sock")
++			listener, err := net.Listen("unix", socket)
++			require.NoError(t, err)
++			gateway := &http.Server{Handler: router}
++			go func() { _ = gateway.Serve(listener) }()
++			defer gateway.Close()
++			script := `import {request} from 'node:http';
++import {createSub2ApiTransport} from './lib/consumer/sub2api-fetch.ts';
++import {prepareOverseasSingleImageGeneration} from './lib/ai/index.ts';
++const inspect=async p=>({mode:p.endsWith('.sock')?0o600:0o700,uid:10001,isSocket:()=>p.endsWith('.sock'),isDirectory:()=>!p.endsWith('.sock'),isSymbolicLink:()=>false});
++const routed=(options,cb)=>request({...options,socketPath:process.env.ZAOSHI_TEST_SOCKET},cb);
++const transport=createSub2ApiTransport({requestTimeoutMs:300,privateTestExpiresAt:Math.floor(Date.now()/1000)+60},{request:routed,lstat:inspect,effectiveUid:10001});
++const work={workflowType:'self-service',purpose:'final',resolution:'1K',aspectRatio:'1:1',quality:'auto',style:{presetId:'self-service'},lighting:{timeOfDay:'day',lampState:'off',colorTemperatureKelvin:4000},renovationScope:'restyle',customPrompt:'test',outputCount:1,providerPreference:process.env.ZAOSHI_TEST_PROVIDER==='google'?'gemini-3-pro-image':'gpt-image-2'};
++const prepared=prepareOverseasSingleImageGeneration(work,{env:{BACKEND_PROFILE:'cn-production',OPENAI_API_KEY:'fake-gateway',GOOGLE_API_KEY:'fake-gateway'},fetch:(input,init)=>{const headers=new Headers(init.headers);headers.set('X-Request-ID','attempt_12345678-1234-1234-1234-123456789012');return transport.fetch(input,{...init,headers})}});
++try{await prepared.execute();console.error('unexpected success');process.exit(1)}catch(e){if(e.providerRequestId!=='actual-chain-id'){console.error('lost provider id',e.providerRequestId);process.exit(2)}console.log('known-id failure retained')}`
++			cmd := exec.CommandContext(context.Background(), "node", "--import", "tsx", "--input-type=module", "-e", script)
++			cmd.Dir = website
++			cmd.Env = append(os.Environ(), "ZAOSHI_TEST_SOCKET="+socket, "ZAOSHI_TEST_PROVIDER="+provider)
++			output, err := cmd.CombinedOutput()
++			require.NoError(t, err, string(output))
++			require.Contains(t, string(output), "known-id failure retained")
++			require.Equal(t, int32(1), posts.Load())
++		})
++	}
++}
+diff --git a/backend/internal/repository/http_upstream.go b/backend/internal/repository/http_upstream.go
+index b27f20e..9465062 100644
+--- a/backend/internal/repository/http_upstream.go
++++ b/backend/internal/repository/http_upstream.go
+@@ -201,6 +201,9 @@ func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
+ //   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
+ //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
+ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
++	if req != nil && service.ZaoshiImageBudgetFromContext(req.Context()) != nil {
++		return doZaoshiImageRequest(req, proxyURL, zaoshiImageTransport())
++	}
+ 	applyGrokCLIProxyHeaders(req)
+ 	if err := s.validateRequestHost(req); err != nil {
+ 		return nil, err
+@@ -244,6 +247,9 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
+ // profile 为 nil 时不启用 TLS 指纹，行为与 Do 方法相同。
+ // profile 非 nil 时使用指定的 Profile 进行 TLS 指纹伪装。
+ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
++	if req != nil && service.ZaoshiImageBudgetFromContext(req.Context()) != nil && profile != nil {
++		return nil, errors.New("zaoshi image TLS fingerprint forbidden")
++	}
+ 	if profile == nil {
+ 		return s.Do(req, proxyURL, accountID, accountConcurrency)
+ 	}
+@@ -305,6 +311,10 @@ func doUpstreamRequest(client *http.Client, req *http.Request) (*http.Response,
+ 		cancel()
+ 		return resp, err
+ 	}
++	if budget := service.ZaoshiImageBudgetFromContext(req.Context()); budget != nil {
++		// Decoder initialization can read; expose actual headers before it does.
++		budget.ObserveResponseHeaders(resp.StatusCode, resp.Header)
++	}
+ 	decompressResponseBody(resp)
+ 	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+ 	return resp, nil
+diff --git a/backend/internal/repository/zaoshi_image_transport.go b/backend/internal/repository/zaoshi_image_transport.go
+new file mode 100644
+index 0000000..1bb6c16
+--- /dev/null
++++ b/backend/internal/repository/zaoshi_image_transport.go
+@@ -0,0 +1,73 @@
++package repository
++
++import (
++	"context"
++	"crypto/tls"
++	"errors"
++	"io"
++	"net"
++	"net/http"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/service"
++)
++
++func zaoshiImageTransport() *http.Transport {
++	return &http.Transport{
++		DialContext:       (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
++		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}},
++		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
++		ForceAttemptHTTP2: false, DisableKeepAlives: true, DisableCompression: true,
++		TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 300 * time.Second,
++		MaxResponseHeaderBytes: 16 << 10,
++	}
++}
++
++func doZaoshiImageRequest(req *http.Request, proxy string, transport *http.Transport) (*http.Response, error) {
++	budget := service.ZaoshiImageBudgetFromContext(req.Context())
++	if err := budget.Claim(req, proxy); err != nil {
++		return nil, err
++	}
++	// WithoutCancel intentionally detaches client disconnects; restore the same
++	// absolute deadline here, and retain it until the response body is closed.
++	ctx, cancel := context.WithDeadline(req.Context(), budget.Deadline)
++	request := req.Clone(ctx)
++	request.GetBody = nil
++	request.Close = true
++	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++	resp, err := doUpstreamRequest(client, request)
++	if err != nil {
++		cancel()
++		transport.CloseIdleConnections()
++		return nil, err
++	}
++	resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() { cancel(); transport.CloseIdleConnections() }}
++	limit := int64(12 << 20)
++	if resp.StatusCode >= 400 {
++		limit = 64 << 10
++	}
++	resp.Body = &zaoshiBoundedBody{ReadCloser: resp.Body, remaining: limit, onComplete: budget.MarkResponseBodyComplete}
++	return resp, nil
++}
++
++type zaoshiBoundedBody struct {
++	io.ReadCloser
++	remaining  int64
++	onComplete func()
++}
++
++func (b *zaoshiBoundedBody) Read(p []byte) (int, error) {
++	if int64(len(p)) > b.remaining+1 {
++		p = p[:b.remaining+1]
++	}
++	n, err := b.ReadCloser.Read(p)
++	if int64(n) > b.remaining {
++		_ = b.ReadCloser.Close()
++		return 0, errors.New("zaoshi image response exceeds bounded limit")
++	}
++	b.remaining -= int64(n)
++	if err == io.EOF && b.onComplete != nil {
++		b.onComplete()
++	}
++	return n, err
++}
+diff --git a/backend/internal/repository/zaoshi_image_transport_test.go b/backend/internal/repository/zaoshi_image_transport_test.go
+new file mode 100644
+index 0000000..f3cf1ea
+--- /dev/null
++++ b/backend/internal/repository/zaoshi_image_transport_test.go
+@@ -0,0 +1,258 @@
++package repository
++
++import (
++	"context"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/tls"
++	"crypto/x509"
++	"crypto/x509/pkix"
++	"io"
++	"math/big"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/service"
++)
++
++func zaoshiTLSFixture(t *testing.T, handler http.Handler) (*httptest.Server, *x509.CertPool) {
++	t.Helper()
++	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	if err != nil {
++		t.Fatal(err)
++	}
++	cert := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test only"}, DNSNames: []string{"api.openai.com", "chatgpt.com", "generativelanguage.googleapis.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
++	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
++	if err != nil {
++		t.Fatal(err)
++	}
++	parsed, err := x509.ParseCertificate(der)
++	if err != nil {
++		t.Fatal(err)
++	}
++	pool := x509.NewCertPool()
++	pool.AddCert(parsed)
++	server := httptest.NewUnstartedServer(handler)
++	server.EnableHTTP2 = true
++	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}
++	server.StartTLS()
++	t.Cleanup(server.Close)
++	return server, pool
++}
++
++// The fake upstream counts actual POSTs after TLS and ALPN, including failures.
++func TestZaoshiImageSingleWirePOST(t *testing.T) {
++	for _, fixture := range []struct{ model, accountType string }{
++		{"gpt-image-2.5-sunburst", service.AccountTypeAPIKey}, {"gpt-image-2.5-flare", service.AccountTypeAPIKey}, {"gpt-image-2", service.AccountTypeAPIKey},
++		{"gemini-3.1-flash-lite-image", service.AccountTypeAPIKey}, {"gemini-3.1-flash-image", service.AccountTypeAPIKey}, {"gemini-3-pro-image", service.AccountTypeAPIKey},
++		{"gpt-image-2.5-sunburst", service.AccountTypeOAuth}, {"gpt-image-2.5-flare", service.AccountTypeOAuth}, {"gpt-image-2", service.AccountTypeOAuth},
++	} {
++		model := fixture.model
++		for _, scenario := range []string{"success", "429", "500", "redirect", "disconnect", "stalled-body", "large-success", "large-error"} {
++			t.Run(fixture.accountType+"/"+model+"/"+scenario, func(t *testing.T) {
++				var posts atomic.Int32
++				var protocol atomic.Int32
++				server, pool := zaoshiTLSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++					if r.Method != "POST" {
++						t.Errorf("unexpected method %s", r.Method)
++					}
++					posts.Add(1)
++					protocol.Store(int32(r.ProtoMajor))
++					_, _ = io.Copy(io.Discard, r.Body)
++					if scenario == "disconnect" {
++						conn, _, _ := w.(http.Hijacker).Hijack()
++						_ = conn.Close()
++						return
++					}
++					w.Header().Set("x-request-id", "actual-upstream")
++					if scenario == "large-success" {
++						_, _ = w.Write(make([]byte, 13<<20))
++						return
++					}
++					if scenario == "large-error" {
++						w.WriteHeader(500)
++						_, _ = w.Write(make([]byte, 65<<10))
++						return
++					}
++					switch scenario {
++					case "429":
++						w.WriteHeader(429)
++					case "500":
++						w.WriteHeader(500)
++					case "redirect":
++						w.Header().Set("Location", serverRedirectURL(r))
++						w.WriteHeader(307)
++					case "stalled-body":
++						w.Header().Set("Content-Length", "100")
++						w.WriteHeader(200)
++						w.(http.Flusher).Flush()
++						<-r.Context().Done()
++						return
++					}
++					_, _ = io.WriteString(w, "{}")
++				}))
++				var id string
++				parent, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
++				defer cancel()
++				ctx := service.WithZaoshiImageBudget(parent, model, time.Now(), func(value string) { id = value })
++				// The OpenAI production path strips the context deadline before send.
++				ctx = context.WithoutCancel(ctx)
++				path := "https://api.openai.com/v1/images/generations"
++				if fixture.accountType == service.AccountTypeOAuth {
++					b := service.ZaoshiImageBudgetFromContext(ctx)
++					b.GroupID = 8
++					if err := b.BindAccount(&service.Account{ID: 35, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, GroupIDs: []int64{8}}, model); err != nil {
++						t.Fatal(err)
++					}
++					path = "https://chatgpt.com/backend-api/codex/images/edits"
++				}
++				if strings.HasPrefix(model, "gemini-") {
++					path = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
++				}
++				req, _ := http.NewRequestWithContext(ctx, "POST", path, strings.NewReader("{}"))
++				tr := zaoshiImageTransport()
++				tr.TLSClientConfig.RootCAs = pool
++				tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
++					return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
++				}
++				if tr.ForceAttemptHTTP2 || !tr.DisableKeepAlives || tr.Proxy != nil || tr.TLSClientConfig.InsecureSkipVerify {
++					t.Fatal("unsafe production transport")
++				}
++				resp, err := doZaoshiImageRequest(req, "", tr)
++				if scenario == "disconnect" {
++					if err == nil {
++						t.Fatal("expected disconnect")
++					}
++				} else {
++					if err != nil {
++						t.Fatal(err)
++					}
++					_, readErr := io.ReadAll(resp.Body)
++					_ = resp.Body.Close()
++					if (scenario == "stalled-body" || scenario == "large-success" || scenario == "large-error") && readErr == nil {
++						t.Fatal("body deadline not enforced")
++					}
++					if id != "actual-upstream" {
++						t.Fatalf("lost provider id %q", id)
++					}
++				}
++				if _, err := doZaoshiImageRequest(req.Clone(ctx), "", tr); err == nil {
++					t.Fatal("second send allowed")
++				}
++				if posts.Load() != 1 || protocol.Load() != 1 {
++					t.Fatalf("wire posts=%d HTTP=%d", posts.Load(), protocol.Load())
++				}
++			})
++		}
++	}
++}
++
++func serverRedirectURL(r *http.Request) string { return "https://" + r.Host + "/v1/images/edits" }
++
++func TestZaoshiImageRejectsBeforeWire(t *testing.T) {
++	for _, url := range []string{"http://api.openai.com/v1/images/generations", "https://evil.example/v1/images/generations", "https://api.openai.com/v1/responses", "https://api.openai.com/v1/images/generations?x=1"} {
++		ctx := service.WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++		req, _ := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("{}"))
++		if _, err := doZaoshiImageRequest(req, "", zaoshiImageTransport()); err == nil {
++			t.Fatal("unsafe URL allowed")
++		}
++	}
++	ctx := service.WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now().Add(-301*time.Second), nil)
++	req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/images/generations", strings.NewReader("{}"))
++	if _, err := doZaoshiImageRequest(req, "", zaoshiImageTransport()); err == nil {
++		t.Fatal("expired request allowed")
++	}
++}
++
++func TestZaoshiImageConcurrentRequestsShareOneWireBudget(t *testing.T) {
++	var posts atomic.Int32
++	server, pool := zaoshiTLSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { posts.Add(1); _, _ = w.Write([]byte("{}")) }))
++	ctx := service.WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++	var completed atomic.Int32
++	var workers sync.WaitGroup
++	for i := 0; i < 10; i++ {
++		workers.Add(1)
++		go func() {
++			defer workers.Done()
++			req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/images/generations", strings.NewReader("{}"))
++			tr := zaoshiImageTransport()
++			tr.TLSClientConfig.RootCAs = pool
++			tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
++				return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
++			}
++			if resp, err := doZaoshiImageRequest(req, "", tr); err == nil {
++				_, _ = io.ReadAll(resp.Body)
++				_ = resp.Body.Close()
++				completed.Add(1)
++			}
++		}()
++	}
++	workers.Wait()
++	if posts.Load() != 1 || completed.Load() != 1 {
++		t.Fatalf("posts=%d completed=%d", posts.Load(), completed.Load())
++	}
++}
++
++// Decoder initialization may read the body; provider headers must be observed
++// first even when that encoded body never arrives.
++func TestZaoshiCompressedHeadersObservedBeforeBodyRead(t *testing.T) {
++	for _, encoding := range []string{"gzip", "zstd"} {
++		t.Run(encoding, func(t *testing.T) {
++			var posts atomic.Int32
++			upstreamHeaders := make(chan struct{})
++			server, pool := zaoshiTLSFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				posts.Add(1)
++				_, _ = io.Copy(io.Discard, r.Body)
++				w.Header().Set("X-Request-ID", "actual-compressed-id")
++				w.Header().Set("Content-Encoding", encoding)
++				w.WriteHeader(200)
++				w.(http.Flusher).Flush()
++				close(upstreamHeaders)
++				<-r.Context().Done()
++			}))
++			ctx := service.WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++			budget := service.ZaoshiImageBudgetFromContext(ctx)
++			budget.Deadline = time.Now().Add(time.Second)
++			observed := make(chan struct{}, 2)
++			var observations atomic.Int32
++			budget.OnResponseHeaders = func(status int, headers http.Header) {
++				observations.Add(1)
++				if status != 200 || headers.Get("X-Request-ID") != "actual-compressed-id" {
++					t.Error("actual status/provider headers changed")
++				}
++				observed <- struct{}{}
++			}
++			tr := zaoshiImageTransport()
++			tr.TLSClientConfig.RootCAs = pool
++			tr.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
++				return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
++			}
++			req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/images/generations", strings.NewReader(`{}`))
++			finished := make(chan struct{})
++			go func() {
++				resp, _ := doZaoshiImageRequest(req, "", tr)
++				if resp != nil {
++					_ = resp.Body.Close()
++				}
++				close(finished)
++			}()
++			<-upstreamHeaders
++			select {
++			case <-observed:
++			case <-time.After(250 * time.Millisecond):
++				t.Error("provider headers delayed behind compressed body read")
++			}
++			<-finished
++			if observations.Load() != 1 || budget.ProviderRequestID() != "actual-compressed-id" || posts.Load() != 1 {
++				t.Fatalf("observations=%d providerID=%q wirePOSTs=%d", observations.Load(), budget.ProviderRequestID(), posts.Load())
++			}
++		})
++	}
++}
+diff --git a/backend/internal/service/gateway_scheduling.go b/backend/internal/service/gateway_scheduling.go
+index 059d7e2..7db6d6d 100644
+--- a/backend/internal/service/gateway_scheduling.go
++++ b/backend/internal/service/gateway_scheduling.go
+@@ -1012,6 +1012,22 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
+ }
+ 
+ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil {
++		if groupID == nil || *groupID != budget.GroupID || platform != budget.Platform || budget.GroupID <= 0 {
++			return nil, false, fmt.Errorf("zaoshi image scheduling group forbidden")
++		}
++		accounts, err := s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, budget.GroupID, platform)
++		if err != nil {
++			return nil, false, err
++		}
++		filtered := accounts[:0]
++		for i := range accounts {
++			if budget.ValidateAccount(&accounts[i], budget.Model) == nil {
++				filtered = append(filtered, accounts[i])
++			}
++		}
++		return s.filterAccountsBySchedulingThreshold(ctx, filtered), false, nil
++	}
+ 	if s.schedulerSnapshot != nil {
+ 		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+ 		if err == nil {
+@@ -1524,6 +1540,9 @@ func (s *GatewayService) getSchedulableAccount(ctx context.Context, accountID in
+ 	if err != nil || account == nil {
+ 		return account, err
+ 	}
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil && budget.ValidateAccount(account, budget.Model) != nil {
++		return nil, nil
++	}
+ 	if s.isAccountBlockedBySchedulingThreshold(ctx, account) {
+ 		return nil, nil
+ 	}
+diff --git a/backend/internal/service/gateway_usage_billing.go b/backend/internal/service/gateway_usage_billing.go
+index 3a612d1..7b2ce3a 100644
+--- a/backend/internal/service/gateway_usage_billing.go
++++ b/backend/internal/service/gateway_usage_billing.go
+@@ -1198,7 +1198,7 @@ func (s *GatewayService) buildRecordUsageLog(
+ 		APIKeyID:                 apiKey.ID,
+ 		AccountID:                account.ID,
+ 		RequestID:                requestID,
+-		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, false),
++		UpstreamRequestID:        zaoshiUsageUpstreamID(ctx, account, result.UpstreamHeaders, false),
+ 		Model:                    result.Model,
+ 		RequestedModel:           requestedModel,
+ 		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
+diff --git a/backend/internal/service/gemini_messages_compat_service.go b/backend/internal/service/gemini_messages_compat_service.go
+index 278cbfa..8c97012 100644
+--- a/backend/internal/service/gemini_messages_compat_service.go
++++ b/backend/internal/service/gemini_messages_compat_service.go
+@@ -1159,6 +1159,14 @@ func isGeminiSignatureRelatedError(respBody []byte) bool {
+ }
+ 
+ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte) (*ForwardResult, error) {
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil {
++		if err := budget.ValidateAccount(account, originalModel); err != nil {
++			return nil, s.writeGoogleError(c, http.StatusBadGateway, err.Error())
++		}
++		if action != "generateContent" || stream {
++			return nil, s.writeGoogleError(c, http.StatusBadRequest, "Only synchronous image generateContent is allowed")
++		}
++	}
+ 	beginUpstreamResponseModelObservation(c)
+ 	beginGeminiImageOutputObservation(c)
+ 	startTime := time.Now()
+@@ -1339,7 +1347,11 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
+ 	}
+ 
+ 	var resp *http.Response
+-	for attempt := 1; attempt <= geminiMaxRetries; attempt++ {
++	maxAttempts := geminiMaxRetries
++	if ZaoshiImageBudgetFromContext(ctx) != nil {
++		maxAttempts = 1
++	}
++	for attempt := 1; attempt <= maxAttempts; attempt++ {
+ 		upstreamReq, idHeader, err := buildReq(ctx)
+ 		if err != nil {
+ 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+@@ -1382,7 +1394,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
+ 			resp = rebuilt
+ 		}
+ 
+-		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
++		if resp.StatusCode >= 400 && ZaoshiImageBudgetFromContext(ctx) == nil && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
+ 			respBody := s.readUpstreamErrorBody(resp)
+ 			_ = resp.Body.Close()
+ 			// Don't treat insufficient-scope as transient.
+@@ -2708,6 +2720,11 @@ func (s *GeminiMessagesCompatService) handleNativeNonStreamingResponse(c *gin.Co
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	if budget := ZaoshiImageBudgetFromContext(c.Request.Context()); budget != nil && budget.ProviderRequestID() == "" {
++		if id := zaoshiGoogleResponseID(respBody); id != "" {
++			budget.CaptureProviderID(http.Header{"X-Request-Id": []string{id}})
++		}
++	}
+ 
+ 	if isOAuth {
+ 		unwrappedBody, uwErr := unwrapGeminiResponse(respBody)
+diff --git a/backend/internal/service/openai_account_scheduler.go b/backend/internal/service/openai_account_scheduler.go
+index ae4e2c2..4bcb247 100644
+--- a/backend/internal/service/openai_account_scheduler.go
++++ b/backend/internal/service/openai_account_scheduler.go
+@@ -1773,6 +1773,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.C
+ // openAISelectionFilterStats so that "no available accounts" errors state why
+ // each candidate was dropped instead of failing silently (#4599).
+ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx context.Context, account *Account, req OpenAIAccountScheduleRequest) (bool, string) {
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil && budget.ValidateAccount(account, req.RequestedModel) != nil {
++		return false, "zaoshi_image_account_forbidden"
++	}
+ 	if account == nil {
+ 		return false, "account_nil"
+ 	}
+@@ -2143,6 +2146,9 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
+ 	requiredCapability OpenAIImagesCapability,
+ ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+ 	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false, PlatformOpenAI, false, false)
++	if ZaoshiImageBudgetFromContext(ctx) != nil {
++		return selection, decision, err
++	}
+ 	if err == nil && selection != nil && selection.Account != nil {
+ 		return selection, decision, nil
+ 	}
+diff --git a/backend/internal/service/openai_gateway_scheduling.go b/backend/internal/service/openai_gateway_scheduling.go
+index fe93880..94f4525 100644
+--- a/backend/internal/service/openai_gateway_scheduling.go
++++ b/backend/internal/service/openai_gateway_scheduling.go
+@@ -1500,6 +1500,22 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
+ 
+ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+ 	platform = NormalizeOpenAICompatiblePlatform(platform)
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil {
++		if groupID == nil || *groupID != budget.GroupID || platform != budget.Platform || budget.GroupID <= 0 {
++			return nil, fmt.Errorf("zaoshi image scheduling group forbidden")
++		}
++		accounts, err := s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, budget.GroupID, platform)
++		if err != nil {
++			return nil, err
++		}
++		filtered := accounts[:0]
++		for i := range accounts {
++			if budget.ValidateAccount(&accounts[i], budget.Model) == nil {
++				filtered = append(filtered, accounts[i])
++			}
++		}
++		return s.filterOpenAIAccountsBySchedulingThreshold(ctx, filtered), nil
++	}
+ 	if s.schedulerSnapshot != nil {
+ 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
+ 		if err != nil {
+@@ -1678,6 +1694,9 @@ func (s *OpenAIGatewayService) getSchedulableAccount(ctx context.Context, accoun
+ 	if err != nil || account == nil {
+ 		return account, err
+ 	}
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil && budget.ValidateAccount(account, budget.Model) != nil {
++		return nil, nil
++	}
+ 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, account) {
+ 		return nil, nil
+ 	}
+diff --git a/backend/internal/service/openai_gateway_usage.go b/backend/internal/service/openai_gateway_usage.go
+index 824d2b9..9720dc7 100644
+--- a/backend/internal/service/openai_gateway_usage.go
++++ b/backend/internal/service/openai_gateway_usage.go
+@@ -382,7 +382,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
+ 		APIKeyID:                 apiKey.ID,
+ 		AccountID:                account.ID,
+ 		RequestID:                requestID,
+-		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, result.OpenAIWSMode),
++		UpstreamRequestID:        zaoshiUsageUpstreamID(ctx, account, result.UpstreamHeaders, result.OpenAIWSMode),
+ 		Model:                    result.Model,
+ 		RequestedModel:           requestedModel,
+ 		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
+diff --git a/backend/internal/service/openai_images.go b/backend/internal/service/openai_images.go
+index e3d6008..84c334b 100644
+--- a/backend/internal/service/openai_images.go
++++ b/backend/internal/service/openai_images.go
+@@ -607,6 +607,14 @@ func (s *OpenAIGatewayService) ForwardImages(
+ 	if parsed == nil {
+ 		return nil, fmt.Errorf("parsed images request is required")
+ 	}
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil {
++		if err := budget.BindAccount(account, parsed.Model); err != nil {
++			return nil, err
++		}
++		if parsed.Stream || parsed.N != 1 || (channelMappedModel != "" && channelMappedModel != parsed.Model) {
++			return nil, fmt.Errorf("zaoshi image request rewrite or streaming forbidden")
++		}
++	}
+ 	switch account.Type {
+ 	case AccountTypeAPIKey:
+ 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
+@@ -968,7 +976,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(
+ 	if err != nil {
+ 		return OpenAIUsage{}, 0, nil, err
+ 	}
+-	body = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, body)
++	if ZaoshiImageBudgetFromContext(ctx) == nil {
++		body = s.backfillOpenAIImagesB64JSON(ctx, account, parsed, body)
++	}
+ 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+ 	contentType := "application/json"
+ 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
+diff --git a/backend/internal/service/openai_images_direct.go b/backend/internal/service/openai_images_direct.go
+index 3ed7a0f..4dd49c7 100644
+--- a/backend/internal/service/openai_images_direct.go
++++ b/backend/internal/service/openai_images_direct.go
+@@ -224,7 +224,7 @@ func (s *OpenAIGatewayService) handleCodexDirectImagesNonStreamingResponse(resp
+ 		}
+ 	}
+ 	clientModel := strings.TrimSpace(parsed.Model)
+-	if clientModel != "" {
++	if clientModel != "" && ZaoshiImageBudgetFromContext(c.Request.Context()) == nil {
+ 		for i := range gjson.GetBytes(body, "data").Array() {
+ 			body, _ = sjson.SetBytes(body, fmt.Sprintf("data.%d.model", i), clientModel)
+ 		}
+diff --git a/backend/internal/service/openai_images_responses.go b/backend/internal/service/openai_images_responses.go
+index 51bc32d..2b3b627 100644
+--- a/backend/internal/service/openai_images_responses.go
++++ b/backend/internal/service/openai_images_responses.go
+@@ -1789,6 +1789,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
+ 	channelMappedModel string,
+ ) (*OpenAIForwardResult, error) {
+ 	startTime := time.Now()
++	protected := ZaoshiImageBudgetFromContext(ctx) != nil
+ 	requestModel := strings.TrimSpace(parsed.Model)
+ 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
+ 		requestModel = mapped
+@@ -1803,7 +1804,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
+ 	if err := validateOpenAIImagesModel(upstreamModel); err != nil {
+ 		return nil, err
+ 	}
+-	direct := usesCodexDirectImages(upstreamModel) && !isOpenAIImagesForceResponses(ctx)
++	direct := usesCodexDirectImages(upstreamModel) && (protected || !isOpenAIImagesForceResponses(ctx))
+ 	beginUpstreamResponseModelObservation(c)
+ 	SetOpsUpstreamModel(c, upstreamModel)
+ 	logger.LegacyPrintf(
+@@ -1817,15 +1818,30 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
+ 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+ 	defer releaseUpstreamCtx()
+ 
+-	token, _, err := s.GetAccessToken(upstreamCtx, account)
+-	if err != nil {
+-		return nil, err
++	var token string
++	var err error
++	if protected {
++		if account.IsOpenAITokenExpired() {
++			return nil, fmt.Errorf("stored OpenAI access_token expired")
++		}
++		token = account.GetOpenAIAccessToken()
++		if token == "" {
++			return nil, fmt.Errorf("access_token not found in credentials")
++		}
++	} else {
++		token, _, err = s.GetAccessToken(upstreamCtx, account)
++		if err != nil {
++			return nil, err
++		}
+ 	}
+ 
+ 	var responsesBody []byte
+ 	var targetURL string
+ 	if direct {
+ 		responsesBody, targetURL, err = buildOpenAIImagesOAuthPayload(parsed, upstreamModel)
++		if protected && err == nil {
++			responsesBody, err = sjson.SetBytes(responsesBody, "n", 1)
++		}
+ 	} else {
+ 		responsesBody, err = buildOpenAIImagesResponsesRequest(parsed, upstreamModel)
+ 		targetURL = chatgptCodexURL
+@@ -1834,7 +1850,22 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
+ 		return nil, err
+ 	}
+ 	upstreamCtx = withOpenAIImagesSelfBuiltRequest(upstreamCtx)
+-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
++	var upstreamReq *http.Request
++	if protected {
++		// Do not resolve shadow credentials, refresh tokens or inherit client identity.
++		upstreamReq, err = http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(responsesBody))
++		if err == nil {
++			upstreamReq.Header.Set("Authorization", "Bearer "+token)
++			upstreamReq.Header.Set("User-Agent", codexCLIUserAgent)
++			upstreamReq.Header.Set("originator", "codex-tui")
++			upstreamReq.Header.Set("version", codexCLIVersion)
++			if id := account.GetChatGPTAccountID(); id != "" {
++				upstreamReq.Header.Set("Chatgpt-Account-Id", id)
++			}
++		}
++	} else {
++		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
++	}
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -1880,6 +1911,11 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
+ 	if resp.StatusCode >= 400 {
+ 		respBody := s.readUpstreamErrorBody(resp)
+ 		_ = resp.Body.Close()
++		if protected {
++			upErr := &OpenAIImagesUpstreamError{StatusCode: resp.StatusCode, ErrorType: "upstream_error", Message: "Upstream image request failed", UpstreamRequestID: ZaoshiImageBudgetFromContext(ctx).ProviderRequestID()}
++			writeOpenAIImagesUpstreamErrorResponse(c, upErr)
++			return nil, upErr
++		}
+ 		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
+ 		if direct && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+ 			return s.forwardOpenAIImagesOAuth(withOpenAIImagesForceResponses(ctx), c, account, parsed, channelMappedModel)
+@@ -1979,6 +2015,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
+ 			usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
+ 		}
+ 		if err != nil {
++			if protected {
++				return nil, err
++			}
+ 			return nil, s.handleOpenAIImagesOAuthResponseError(
+ 				upstreamCtx,
+ 				c,
+diff --git a/backend/internal/service/openai_plugin_transport.go b/backend/internal/service/openai_plugin_transport.go
+index 82b8d35..db66c3e 100644
+--- a/backend/internal/service/openai_plugin_transport.go
++++ b/backend/internal/service/openai_plugin_transport.go
+@@ -9,6 +9,12 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
+ // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
+ // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
+ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
++	if budget := ZaoshiImageBudgetFromContext(request.Context()); budget != nil {
++		if err := budget.BindAccount(account, budget.Model); err != nil {
++			return nil, err
++		}
++		return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
++	}
+ 	if s.pluginManager != nil {
+ 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
+ 		if handled {
+diff --git a/backend/internal/service/zaoshi_image_budget.go b/backend/internal/service/zaoshi_image_budget.go
+new file mode 100644
+index 0000000..71f845d
+--- /dev/null
++++ b/backend/internal/service/zaoshi_image_budget.go
+@@ -0,0 +1,218 @@
++package service
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"strings"
++	"sync/atomic"
++	"time"
++)
++
++const ZaoshiProviderRequestIDHeader = "X-Zaoshi-Provider-Request-Id"
++
++type zaoshiImageBudgetKey struct{}
++
++type zaoshiImageAccountBinding struct {
++	id   int64
++	kind string
++}
++
++// One object survives account selection, request clones and WithoutCancel.
++type ZaoshiImageBudget struct {
++	Model             string
++	Platform          string
++	Deadline          time.Time
++	GroupID           int64
++	account           atomic.Pointer[zaoshiImageAccountBinding] // immutable selected account
++	sent              atomic.Bool
++	bodyComplete      atomic.Bool
++	providerID        atomic.Value
++	captureID         func(string)
++	OnResponseHeaders func(int, http.Header)
++}
++
++func ZaoshiImagePlatform(model string) string {
++	switch model {
++	case "gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "gpt-image-2":
++		return PlatformOpenAI
++	case "gemini-3.1-flash-lite-image", "gemini-3.1-flash-image", "gemini-3-pro-image":
++		return PlatformGemini
++	}
++	return ""
++}
++
++func ZaoshiImageModelVariant(model string) bool {
++	if ZaoshiImagePlatform(model) != "" {
++		return false
++	}
++	for _, candidate := range groupModelAllowlistCandidates(model) {
++		if ZaoshiImagePlatform(candidate) != "" {
++			return true
++		}
++	}
++	return false
++}
++
++func WithZaoshiImageBudget(ctx context.Context, model string, started time.Time, capture func(string)) context.Context {
++	deadline := started.Add(300 * time.Second)
++	if existing, ok := ctx.Deadline(); ok && existing.Before(deadline) {
++		deadline = existing
++	}
++	return context.WithValue(ctx, zaoshiImageBudgetKey{}, &ZaoshiImageBudget{Model: model, Platform: ZaoshiImagePlatform(model), Deadline: deadline, captureID: capture})
++}
++
++func ZaoshiImageBudgetFromContext(ctx context.Context) *ZaoshiImageBudget {
++	budget, _ := ctx.Value(zaoshiImageBudgetKey{}).(*ZaoshiImageBudget)
++	return budget
++}
++
++func CopyZaoshiImageBudget(parent, target context.Context) context.Context {
++	if budget := ZaoshiImageBudgetFromContext(parent); budget != nil {
++		return context.WithValue(target, zaoshiImageBudgetKey{}, budget)
++	}
++	return target
++}
++
++func (b *ZaoshiImageBudget) Sent() bool { return b.sent.Load() }
++
++func (b *ZaoshiImageBudget) MarkResponseBodyComplete() { b.bodyComplete.Store(true) }
++func (b *ZaoshiImageBudget) BodyOutcome() string {
++	if !b.Sent() {
++		return "not_attempted"
++	}
++	if b.bodyComplete.Load() {
++		return "response_body_complete"
++	}
++	return "response_body_incomplete"
++}
++
++func (b *ZaoshiImageBudget) ValidateAccount(account *Account, model string) error {
++	if b.GroupID <= 0 || !openAIStickyAccountMatchesGroup(account, &b.GroupID) || account == nil || (account.Type != AccountTypeAPIKey && !(b.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth)) || account.IsShadow() || account.IsOpenAIAgentIdentity() || account.Platform != b.Platform || model != b.Model || account.GetMappedModel(model) != model || account.ProxyID != nil || account.Proxy != nil || account.IsCustomBaseURLEnabled() || len(account.GetHeaderOverrides()) != 0 || account.GetOpenAIUserAgent() != "" {
++		return errors.New("zaoshi image request requires an unmodified official account")
++	}
++	base := strings.TrimRight(strings.TrimSpace(account.GetCredential("base_url")), "/")
++	if account.Type == AccountTypeOAuth {
++		if base != "" && base != "https://chatgpt.com" {
++			return errors.New("zaoshi image account origin forbidden")
++		}
++	} else if base != "" && ((b.Platform == PlatformOpenAI && base != "https://api.openai.com" && base != "https://api.openai.com/v1") || (b.Platform == PlatformGemini && base != "https://generativelanguage.googleapis.com")) {
++		return errors.New("zaoshi image account origin forbidden")
++	}
++	return nil
++}
++
++// Candidate validation is pure; bind only after an account has been selected.
++func (b *ZaoshiImageBudget) BindAccount(account *Account, model string) error {
++	if err := b.ValidateAccount(account, model); err != nil {
++		return err
++	}
++	if account.ID <= 0 {
++		return errors.New("zaoshi image selected account ID required")
++	}
++	selected := &zaoshiImageAccountBinding{id: account.ID, kind: account.Type}
++	if b.account.CompareAndSwap(nil, selected) {
++		return nil
++	}
++	bound := b.account.Load()
++	if *bound != *selected {
++		return errors.New("zaoshi image selected account changed")
++	}
++	return nil
++}
++
++func (b *ZaoshiImageBudget) Claim(req *http.Request, proxy string) error {
++	if req == nil || req.URL == nil || proxy != "" {
++		return errors.New("zaoshi image transport forbidden")
++	}
++	u := req.URL
++	valid := u.Scheme == "https" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.RawPath == "" && req.Method == http.MethodPost && (u.Port() == "" || u.Port() == "443")
++	if b.Platform == PlatformOpenAI {
++		if selected := b.account.Load(); selected != nil && selected.kind == AccountTypeOAuth {
++			valid = valid && u.Hostname() == "chatgpt.com" && (u.Path == "/backend-api/codex/images/generations" || u.Path == "/backend-api/codex/images/edits")
++		} else {
++			valid = valid && u.Hostname() == "api.openai.com" && (u.Path == "/v1/images/generations" || u.Path == "/v1/images/edits")
++		}
++	} else {
++		valid = valid && b.Platform == PlatformGemini && u.Hostname() == "generativelanguage.googleapis.com" && u.Path == "/v1beta/models/"+b.Model+":generateContent"
++	}
++	if !valid || (req.Host != "" && req.Host != u.Host) {
++		return errors.New("zaoshi image origin or path forbidden")
++	}
++	if !time.Now().Before(b.Deadline) {
++		return context.DeadlineExceeded
++	}
++	if !b.sent.CompareAndSwap(false, true) {
++		return errors.New("zaoshi image upstream POST budget exhausted")
++	}
++	return nil
++}
++
++func (b *ZaoshiImageBudget) CaptureProviderID(header http.Header) {
++	id := strings.TrimSpace(header.Get("x-request-id"))
++	if id == "" && b.Platform == PlatformGemini {
++		id = strings.TrimSpace(header.Get("x-goog-request-id"))
++	}
++	if id != "" && len(id) <= 200 && !strings.ContainsAny(id, "\r\n") {
++		b.providerID.Store(id)
++		if b.captureID != nil {
++			b.captureID(id)
++		}
++	}
++}
++
++func (b *ZaoshiImageBudget) ObserveResponseHeaders(status int, header http.Header) {
++	b.CaptureProviderID(header)
++	if b.OnResponseHeaders != nil {
++		b.OnResponseHeaders(status, header)
++	}
++}
++
++func (b *ZaoshiImageBudget) ProviderRequestID() string {
++	id, _ := b.providerID.Load().(string)
++	return id
++}
++
++func zaoshiUsageUpstreamID(ctx context.Context, account *Account, headers http.Header, ws bool) *string {
++	if budget := ZaoshiImageBudgetFromContext(ctx); budget != nil {
++		if id := budget.ProviderRequestID(); id != "" {
++			if len(id) > 128 {
++				return nil
++			}
++			return &id
++		}
++		return nil
++	}
++	return usageUpstreamRequestIDPtr(account, headers, ws)
++}
++
++func zaoshiGoogleResponseID(body []byte) string {
++	var envelope struct {
++		ResponseID string `json:"responseId"`
++		Candidates []struct {
++			FinishReason string `json:"finishReason"`
++			Content      struct {
++				Parts []struct {
++					Thought    bool `json:"thought"`
++					InlineData *struct {
++						Data string `json:"data"`
++					} `json:"inlineData"`
++				} `json:"parts"`
++			} `json:"content"`
++		} `json:"candidates"`
++	}
++	if json.Unmarshal(body, &envelope) != nil || len(envelope.Candidates) != 1 || envelope.Candidates[0].FinishReason != "STOP" {
++		return ""
++	}
++	images := 0
++	for _, part := range envelope.Candidates[0].Content.Parts {
++		if !part.Thought && part.InlineData != nil && part.InlineData.Data != "" {
++			images++
++		}
++	}
++	if images != 1 {
++		return ""
++	}
++	return envelope.ResponseID
++}
+diff --git a/backend/internal/service/zaoshi_image_budget_test.go b/backend/internal/service/zaoshi_image_budget_test.go
+new file mode 100644
+index 0000000..a113520
+--- /dev/null
++++ b/backend/internal/service/zaoshi_image_budget_test.go
+@@ -0,0 +1,127 @@
++package service
++
++import (
++	"context"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/Wei-Shaw/sub2api/internal/config"
++)
++
++type zaoshiAccountRepo struct {
++	AccountRepository
++	group    int64
++	platform string
++	account  Account
++}
++
++func (r *zaoshiAccountRepo) ListSchedulableByGroupIDAndPlatform(_ context.Context, group int64, platform string) ([]Account, error) {
++	r.group = group
++	r.platform = platform
++	return []Account{r.account}, nil
++}
++func (r *zaoshiAccountRepo) GetByID(context.Context, int64) (*Account, error) { return &r.account, nil }
++
++func TestZaoshiImageGroupsAndAccountGuard(t *testing.T) {
++	for _, fixture := range []struct {
++		model    string
++		group    int64
++		platform string
++	}{{"gpt-image-2", 10, PlatformOpenAI}, {"gemini-3-pro-image", 20, PlatformGemini}} {
++		ctx := WithZaoshiImageBudget(context.Background(), fixture.model, time.Now(), nil)
++		budget := ZaoshiImageBudgetFromContext(ctx)
++		budget.GroupID = fixture.group
++		good := Account{ID: 1, Platform: fixture.platform, Type: AccountTypeAPIKey, GroupIDs: []int64{fixture.group}}
++		if err := budget.ValidateAccount(&good, fixture.model); err != nil {
++			t.Fatal(err)
++		}
++		repo := &zaoshiAccountRepo{account: good}
++		if fixture.platform == PlatformOpenAI {
++			gateway := &OpenAIGatewayService{accountRepo: repo, cfg: &config.Config{RunMode: config.RunModeSimple}}
++			accounts, err := gateway.listSchedulableAccounts(ctx, &fixture.group, fixture.platform)
++			if err != nil || len(accounts) != 1 {
++				t.Fatalf("group selection failed: %v", err)
++			}
++			repo.account.GroupIDs = []int64{999}
++			accounts, err = gateway.listSchedulableAccounts(ctx, &fixture.group, fixture.platform)
++			if err != nil || len(accounts) != 0 {
++				t.Fatal("foreign group selected")
++			}
++			if account, _ := gateway.getSchedulableAccount(ctx, 1); account != nil {
++				t.Fatal("foreign sticky selected")
++			}
++		} else {
++			gateway := &GatewayService{accountRepo: repo, cfg: &config.Config{RunMode: config.RunModeSimple}}
++			accounts, mixed, err := gateway.listSchedulableAccounts(ctx, &fixture.group, fixture.platform, false)
++			if err != nil || mixed || len(accounts) != 1 {
++				t.Fatalf("group selection failed: %v", err)
++			}
++			repo.account.GroupIDs = []int64{999}
++			accounts, _, err = gateway.listSchedulableAccounts(ctx, &fixture.group, fixture.platform, false)
++			if err != nil || len(accounts) != 0 {
++				t.Fatal("foreign group selected")
++			}
++			if account, _ := gateway.getSchedulableAccount(ctx, 1); account != nil {
++				t.Fatal("foreign sticky selected")
++			}
++		}
++		if repo.group != fixture.group || repo.platform != fixture.platform {
++			t.Fatal("exact group/platform query bypassed")
++		}
++		for _, mutate := range []func(*Account){func(a *Account) { a.Type = AccountTypeSetupToken }, func(a *Account) { a.Platform = PlatformAntigravity }, func(a *Account) { a.GroupIDs = nil }, func(a *Account) { p := int64(3); a.ProxyID = &p }, func(a *Account) { a.Credentials = map[string]any{"base_url": "https://evil.example"} }, func(a *Account) {
++			a.Credentials = map[string]any{"model_mapping": map[string]any{fixture.model: "rewritten"}}
++		}} {
++			bad := good
++			mutate(&bad)
++			if budget.ValidateAccount(&bad, fixture.model) == nil {
++				t.Fatal("unsafe account accepted")
++			}
++		}
++	}
++}
++
++func TestZaoshiUsageProviderIDIsExactAndCopied(t *testing.T) {
++	ctx := WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++	budget := ZaoshiImageBudgetFromContext(ctx)
++	for _, id := range []string{"actual-provider", strings.Repeat("x", 128), strings.Repeat("x", 129)} {
++		budget.CaptureProviderID(http.Header{"X-Request-Id": []string{id}})
++		target := CopyZaoshiImageBudget(ctx, context.Background())
++		if ZaoshiImageBudgetFromContext(target) != budget {
++			t.Fatal("budget copy lost identity")
++		}
++		got := zaoshiUsageUpstreamID(target, nil, nil, false)
++		if len(id) > 128 {
++			if got != nil {
++				t.Fatal("provider ID was truncated")
++			}
++		} else if got == nil || *got != id {
++			t.Fatal("provider ID lost")
++		}
++	}
++}
++
++func TestZaoshiGoogleResponseIDRequiresSuccessfulImageEnvelope(t *testing.T) {
++	for _, body := range []string{`{"responseId":"false-id","error":{}}`, `{"responseId":"false-id","candidates":[]}`, `{"responseId":"false-id","candidates":[{"finishReason":"MAX_TOKENS"}]}`, `{"id":"arbitrary","candidates":[{"finishReason":"STOP","content":{"parts":[{"inlineData":{"data":"AA=="}}]}}]}`} {
++		if zaoshiGoogleResponseID([]byte(body)) != "" {
++			t.Fatal("invalid envelope ID trusted")
++		}
++	}
++	if id := zaoshiGoogleResponseID([]byte(`{"responseId":"actual","candidates":[{"finishReason":"STOP","content":{"parts":[{"inlineData":{"data":"AA=="}}]}}]}`)); id != "actual" {
++		t.Fatal("actual ID lost")
++	}
++}
++
++func TestZaoshiRejectsAllowlistVariantsOnly(t *testing.T) {
++	for _, model := range []string{"GEMINI-3-PRO-IMAGE", "gemini-3-pro-image-thinking", "GPT-IMAGE-2", "gpt-image-2-thinking", "models/gemini-3.1-flash-image"} {
++		if !ZaoshiImageModelVariant(model) {
++			t.Fatalf("variant missed: %s", model)
++		}
++	}
++	for _, model := range []string{"gpt-image-2", "gemini-3-pro-image", "gemini-2.5-flash", "claude-sonnet-thinking"} {
++		if ZaoshiImageModelVariant(model) {
++			t.Fatalf("unrelated/exact model changed: %s", model)
++		}
++	}
++}
+diff --git a/backend/internal/service/zaoshi_image_oauth_test.go b/backend/internal/service/zaoshi_image_oauth_test.go
+new file mode 100644
+index 0000000..6061d1b
+--- /dev/null
++++ b/backend/internal/service/zaoshi_image_oauth_test.go
+@@ -0,0 +1,279 @@
++package service
++
++import (
++	"bytes"
++	"context"
++	"encoding/base64"
++	"fmt"
++	"image"
++	"image/jpeg"
++	"io"
++	"mime/multipart"
++	"net/http"
++	"net/http/httptest"
++	"net/textproto"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++	"github.com/tidwall/gjson"
++)
++
++func zaoshiOAuthFixture(t *testing.T, model, endpoint string) (*gin.Context, *httptest.ResponseRecorder, []byte, []byte) {
++	t.Helper()
++	var imageBody bytes.Buffer
++	require.NoError(t, jpeg.Encode(&imageBody, image.NewRGBA(image.Rect(0, 0, 2, 2)), nil))
++	var body []byte
++	c, rec := newOpenAIImagesTestContext(t, nil)
++	if endpoint == "/v1/images/edits" {
++		var b bytes.Buffer
++		writer := multipart.NewWriter(&b)
++		for k, v := range map[string]string{"model": model, "prompt": "preserve room", "n": "1", "size": "1024x1536", "quality": "high", "output_format": "jpeg", "response_format": "b64_json"} {
++			require.NoError(t, writer.WriteField(k, v))
++		}
++		part, err := writer.CreatePart(textproto.MIMEHeader{"Content-Disposition": {`form-data; name="image"; filename="room.jpg"`}, "Content-Type": {"image/jpeg"}})
++		require.NoError(t, err)
++		_, err = part.Write(imageBody.Bytes())
++		require.NoError(t, err)
++		require.NoError(t, writer.Close())
++		body = b.Bytes()
++		c.Request = httptest.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
++		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
++	} else {
++		body = []byte(fmt.Sprintf(`{"model":%q,"prompt":"preserve room","n":1,"size":"1024x1536","quality":"high","output_format":"jpeg","response_format":"b64_json"}`, model))
++		c.Request = httptest.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
++		c.Request.Header.Set("Content-Type", "application/json")
++	}
++	ctx := WithZaoshiImageBudget(c.Request.Context(), model, time.Now(), nil)
++	ZaoshiImageBudgetFromContext(ctx).GroupID = 8
++	c.Request = c.Request.WithContext(ctx)
++	return c, rec, body, imageBody.Bytes()
++}
++
++func TestZaoshiOAuthNativeFieldsAndRealModel(t *testing.T) {
++	for _, model := range []string{"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} {
++		for _, endpoint := range []string{"/v1/images/generations", "/v1/images/edits"} {
++			t.Run(model+endpoint, func(t *testing.T) {
++				c, rec, body, jpg := zaoshiOAuthFixture(t, model, endpoint)
++				calls := 0
++				upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
++					calls++
++					budget := ZaoshiImageBudgetFromContext(req.Context())
++					require.NoError(t, budget.Claim(req, proxy))
++					require.Equal(t, "https://chatgpt.com/backend-api/codex"+strings.TrimPrefix(endpoint, "/v1"), req.URL.String())
++					require.Equal(t, "Bearer test-token", req.Header.Get("Authorization"))
++					require.Equal(t, "test-account", req.Header.Get("Chatgpt-Account-Id"))
++					require.Empty(t, req.Header.Get("OpenAI-Beta"))
++					raw, err := io.ReadAll(req.Body)
++					require.NoError(t, err)
++					require.Equal(t, model, gjson.GetBytes(raw, "model").String())
++					require.Equal(t, "1024x1536", gjson.GetBytes(raw, "size").String())
++					require.Equal(t, "high", gjson.GetBytes(raw, "quality").String())
++					require.Equal(t, "jpeg", gjson.GetBytes(raw, "output_format").String())
++					require.Equal(t, int64(1), gjson.GetBytes(raw, "n").Int())
++					require.False(t, gjson.GetBytes(raw, "tools").Exists())
++					if strings.HasSuffix(endpoint, "edits") {
++						require.Equal(t, "data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(jpg), gjson.GetBytes(raw, "images.0.image_url").String())
++					}
++					response := fmt.Sprintf(`{"data":[{"b64_json":%q,"model":"actual-provider-model","output_format":"jpeg"}]}`, base64.StdEncoding.EncodeToString(jpg))
++					budget.ObserveResponseHeaders(200, http.Header{"X-Request-Id": {"actual-provider-id"}})
++					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(response))}, nil
++				}}
++				svc := newOpenAIImagesTestService(upstream)
++				// An uninitialized refresh provider would panic if the protected path used it.
++				svc.openAITokenProvider = &OpenAITokenProvider{}
++				parsed, err := svc.ParseOpenAIImagesRequest(c, body)
++				require.NoError(t, err)
++				account := directImagesTestAccount()
++				account.GroupIDs = []int64{8}
++				result, err := svc.ForwardImages(withOpenAIImagesForceResponses(c.Request.Context()), c, account, body, parsed, "")
++				require.NoError(t, err)
++				require.Equal(t, 1, result.ImageCount)
++				require.Equal(t, 1, calls)
++				require.Equal(t, "actual-provider-model", gjson.GetBytes(rec.Body.Bytes(), "data.0.model").String())
++				require.Equal(t, base64.StdEncoding.EncodeToString(jpg), gjson.GetBytes(rec.Body.Bytes(), "data.0.b64_json").String())
++			})
++		}
++	}
++}
++
++func TestZaoshiOAuthFailureNeverFallsBackOrRefreshes(t *testing.T) {
++	for _, scenario := range []string{"401", "404", "405", "429", "500", "disconnect", "partial", "invalid", "no-model", "missing-token", "expired-token", "wrong-origin", "deadline"} {
++		t.Run(scenario, func(t *testing.T) {
++			c, rec, body, _ := zaoshiOAuthFixture(t, "gpt-image-2", "/v1/images/generations")
++			calls := 0
++			upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
++				calls++
++				if err := ZaoshiImageBudgetFromContext(req.Context()).Claim(req, proxy); err != nil {
++					return nil, err
++				}
++				if scenario == "disconnect" {
++					return nil, io.ErrUnexpectedEOF
++				}
++				response := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("not-json"))}
++				if scenario == "partial" {
++					response.Body = passthroughErrReadCloser{err: io.ErrUnexpectedEOF}
++				}
++				if scenario == "no-model" {
++					response.Body = io.NopCloser(strings.NewReader(`{"data":[{"b64_json":"aGVsbG8="}]}`))
++				}
++				var status int
++				if _, err := fmt.Sscan(scenario, &status); err == nil {
++					response.StatusCode = status
++					response.Body = io.NopCloser(strings.NewReader(`{"error":{"message":"rejected"}}`))
++				}
++				return response, nil
++			}}
++			svc := newOpenAIImagesTestService(upstream)
++			svc.openAITokenProvider = &OpenAITokenProvider{}
++			account := directImagesTestAccount()
++			account.GroupIDs = []int64{8}
++			if scenario == "expired-token" {
++				account.Credentials["expires_at"] = time.Now().Add(-time.Hour).Format(time.RFC3339)
++			}
++			if scenario == "missing-token" {
++				delete(account.Credentials, "access_token")
++			}
++			if scenario == "wrong-origin" {
++				account.Credentials["base_url"] = "https://api.openai.com"
++			}
++			if scenario == "deadline" {
++				ZaoshiImageBudgetFromContext(c.Request.Context()).Deadline = time.Now().Add(-time.Second)
++			}
++			parsed, err := svc.ParseOpenAIImagesRequest(c, body)
++			require.NoError(t, err)
++			_, err = svc.ForwardImages(c.Request.Context(), c, account, body, parsed, "")
++			if scenario == "no-model" {
++				require.NoError(t, err)
++				require.False(t, gjson.GetBytes(rec.Body.Bytes(), "data.0.model").Exists())
++			} else {
++				require.Error(t, err)
++			}
++			expected := 1
++			if scenario == "missing-token" || scenario == "expired-token" || scenario == "wrong-origin" {
++				expected = 0
++			}
++			require.Equal(t, expected, calls)
++			if scenario == "deadline" || expected == 0 {
++				require.False(t, ZaoshiImageBudgetFromContext(c.Request.Context()).Sent())
++			}
++		})
++	}
++}
++
++func TestZaoshiAccountOriginIsBoundToCredentialType(t *testing.T) {
++	for _, kind := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
++		for _, host := range []string{"api.openai.com", "chatgpt.com"} {
++			ctx := WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++			b := ZaoshiImageBudgetFromContext(ctx)
++			b.GroupID = 8
++			account := directImagesTestAccount()
++			account.Type = kind
++			account.GroupIDs = []int64{8}
++			require.NoError(t, b.BindAccount(account, b.Model))
++			path := "/v1/images/edits"
++			if host == "chatgpt.com" {
++				path = "/backend-api/codex/images/edits"
++			}
++			req, err := http.NewRequest(http.MethodPost, "https://"+host+path, nil)
++			require.NoError(t, err)
++			err = b.Claim(req, "")
++			if (kind == AccountTypeOAuth) == (host == "chatgpt.com") {
++				require.NoError(t, err)
++			} else {
++				require.Error(t, err)
++				require.False(t, b.Sent())
++			}
++		}
++	}
++	for _, mutate := range []func(*Account){func(a *Account) { a.Type = AccountTypeSetupToken }, func(a *Account) { id := int64(9); a.ParentAccountID = &id }, func(a *Account) { a.Credentials["base_url"] = "https://api.openai.com" }} {
++		ctx := WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++		b := ZaoshiImageBudgetFromContext(ctx)
++		b.GroupID = 8
++		a := directImagesTestAccount()
++		a.GroupIDs = []int64{8}
++		mutate(a)
++		require.Error(t, b.ValidateAccount(a, b.Model))
++	}
++}
++
++type zaoshiMixedAccountRepo struct {
++	AccountRepository
++	accounts []Account
++}
++
++func (r *zaoshiMixedAccountRepo) ListSchedulableByGroupIDAndPlatform(context.Context, int64, string) ([]Account, error) {
++	return append([]Account(nil), r.accounts...), nil
++}
++
++func TestZaoshiCandidateValidationDoesNotBindSelectedAccount(t *testing.T) {
++	for _, order := range [][]string{{AccountTypeAPIKey, AccountTypeOAuth}, {AccountTypeOAuth, AccountTypeAPIKey}} {
++		t.Run(strings.Join(order, "-"), func(t *testing.T) {
++			ctx := WithZaoshiImageBudget(context.Background(), "gpt-image-2", time.Now(), nil)
++			b := ZaoshiImageBudgetFromContext(ctx)
++			b.GroupID = 8
++			repo := &zaoshiMixedAccountRepo{}
++			for i, kind := range order {
++				a := directImagesTestAccount()
++				a.ID = int64(10 + i)
++				a.Type = kind
++				a.GroupIDs = []int64{8}
++				require.NoError(t, b.ValidateAccount(a, b.Model))
++				repo.accounts = append(repo.accounts, *a)
++			}
++			gateway := newOpenAIImagesTestService(nil)
++			gateway.accountRepo = repo
++			accounts, err := gateway.listSchedulableAccounts(ctx, &b.GroupID, PlatformOpenAI)
++			require.NoError(t, err)
++			require.Len(t, accounts, 2)
++			require.Nil(t, b.account.Load())
++			require.NoError(t, b.BindAccount(&accounts[1], b.Model))
++			require.Equal(t, accounts[1].ID, b.account.Load().id)
++		})
++	}
++}
++
++func TestZaoshiSelectedAccountCannotChangeBeforeOrAfterSend(t *testing.T) {
++	for _, change := range []string{"id", "type"} {
++		t.Run(change, func(t *testing.T) {
++			c, _, body, _ := zaoshiOAuthFixture(t, "gpt-image-2", "/v1/images/generations")
++			calls := 0
++			upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, proxy string, _ int64, _ int) (*http.Response, error) {
++				calls++
++				require.NoError(t, ZaoshiImageBudgetFromContext(req.Context()).Claim(req, proxy))
++				return openAIImagesJSONResponse(), nil
++			}}
++			svc := newOpenAIImagesTestService(upstream)
++			svc.openAITokenProvider = &OpenAITokenProvider{}
++			a := directImagesTestAccount()
++			a.GroupIDs = []int64{8}
++			b := ZaoshiImageBudgetFromContext(c.Request.Context())
++			require.NoError(t, b.BindAccount(a, b.Model))
++			other := *a
++			if change == "id" {
++				other.ID++
++			} else {
++				other.Type = AccountTypeAPIKey
++			}
++			// Candidate filtering remains pure even after selection, but packet dispatch cannot switch.
++			require.NoError(t, b.ValidateAccount(&other, b.Model))
++			require.Error(t, b.BindAccount(&other, b.Model))
++			req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, "https://chatgpt.com/backend-api/codex/images/generations", strings.NewReader("{}"))
++			require.NoError(t, err)
++			_, err = svc.doOpenAIUpstream(req, "", &other)
++			require.Error(t, err)
++			require.Zero(t, calls)
++			require.False(t, b.Sent())
++			parsed, err := svc.ParseOpenAIImagesRequest(c, body)
++			require.NoError(t, err)
++			_, err = svc.ForwardImages(c.Request.Context(), c, a, body, parsed, "")
++			require.NoError(t, err)
++			require.Equal(t, 1, calls)
++			_, err = svc.ForwardImages(c.Request.Context(), c, &other, body, parsed, "")
++			require.Error(t, err)
++			require.Equal(t, 1, calls)
++		})
++	}
++}

@@ -1,0 +1,28 @@
+services:
+  generation-consumer:
+    image: zaoshi-generation-consumer:${ZAOSHI_CONSUMER_IMAGE_TAG:?set ZAOSHI_CONSUMER_IMAGE_TAG to the full release commit SHA}
+    container_name: zaoshi-generation-consumer
+    init: true
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - ${ZAOSHI_CONSUMER_ENV_FILE:-./consumer.env}
+    volumes:
+      - /var/lib/zaoshi/consumer:/var/lib/zaoshi
+      - /etc/zaoshi/secrets/consumer-hmac:/run/secrets/consumer-hmac:ro
+      - /etc/zaoshi/secrets/seedream-api-key:/run/secrets/seedream-api-key:ro
+      - /etc/zaoshi/secrets/qwen-api-key:/run/secrets/qwen-api-key:ro
+    tmpfs:
+      - /run/zaoshi:rw,noexec,nosuid,nodev,mode=0700,uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "node", "/app/consumer.mjs", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 10m
