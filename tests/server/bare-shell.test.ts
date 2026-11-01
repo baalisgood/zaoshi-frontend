@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ReferenceTray } from "../../components/studio/ReferenceTray";
+import { summarizeGenerationInputs } from "../../components/studio/input-limits";
+import type { UploadedImage } from "../../components/studio/StudioFields";
 import { BARE_SHELL_INSTRUCTION } from "../../lib/domain/bare-shell";
 import { compileInteriorPrompt } from "../../lib/ai/prompt";
 import { getStylePreset } from "../../lib/ai/styles";
@@ -72,4 +77,30 @@ test("the mode token never reaches moderation text, and only the source slot can
   assert.match(tray, /\(!sourceOnly \|\| name === "source"\) && \(state === "uploading" \|\| state === "error"\)/u);
   const drafts = await readFile(new URL("../../components/studio/browser-drafts.ts", import.meta.url), "utf8");
   assert.match(drafts, /if \(isBareShellInstruction\(payload\.editInstruction\)\) return \["生成内容：毛坯还原"/u);
+});
+
+
+test("毛坯还原 accepts its source while retained references exceed the model limits", () => {
+  const model = "qwen-image-3.0";
+  const image = { id: "draft", url: "data:image/png;base64,AA==", byteSize: 10 * 1024 * 1024, width: 100, height: 100 } as UploadedImage;
+  const retained = [image, image, image, image];
+  for (const source of [undefined, image]) {
+    const ordinary = summarizeGenerationInputs(model, { source, additionalReferences: retained });
+    assert.equal(ordinary.allowed, false);
+    const render = (sourceOnly: boolean) => {
+      const inputs = sourceOnly ? summarizeGenerationInputs(model, { source }) : ordinary;
+      return renderToStaticMarkup(createElement(ReferenceTray, {
+        workflow: "advanced", sourceOnly, model, source, styleReference: image, softReferences: retained,
+        controlMode: "depth-normal", controlSourceVersion: "current", onSourceChange() {}, onStyleReferenceChange() {},
+        inputCount: inputs.count, inputBytes: inputs.bytes, inputsAllowed: inputs.allowed,
+      }));
+    };
+    const ordinaryHtml = render(false);
+    assert.match(ordinaryHtml.match(/<input[^>]*aria-label="选择结构参考"[^>]*>/u)![0], /disabled=""/u);
+    const shellHtml = render(true);
+    assert.doesNotMatch(shellHtml.match(/<input[^>]*aria-label="选择结构参考"[^>]*>/u)![0], /disabled=/u);
+    assert.doesNotMatch(shellHtml, /切换模型后当前输入超出上限|局部编辑时不参与/u);
+    assert.match(shellHtml, /毛坯还原时不参与/u);
+    if (source) assert.match(shellHtml, /结构参考完整预览[\s\S]*?upload-participation-status">参与本次生成/u);
+  }
 });

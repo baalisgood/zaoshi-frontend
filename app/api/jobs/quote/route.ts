@@ -1,4 +1,4 @@
-import { isOverseasImageModel } from "@/lib/domain/image-models";
+import { requirePublicModelOption } from "@/lib/server/public-model-option";
 import { ApiError, errorResponse, jsonResponse, readJsonBody, requireJsonObject } from "@/lib/server/api";
 import { quoteGenerationPrice } from "@/lib/server/generation-pricing";
 import { assertSameOriginMutation, assertPublicImageGenerationActor, assertGenerationRuntime } from "@/lib/server/runtime-policy";
@@ -21,16 +21,17 @@ export async function POST(request: Request): Promise<Response> {
       context = { privateTest: { config: privateTest, actor } };
     }
     if (!context?.privateTest) {
-      if (isOverseasImageModel(body.modelId)) throw new ApiError(403, "OVERSEAS_MODEL_UNAVAILABLE", "海外模型暂不对公众开放。");
       if (typeof process === "undefined" || process.env.PUBLIC_IMAGE_GENERATION_ENABLED !== "1") throw new ApiError(503, "GENERATION_QUEUE_NOT_READY", "正式生图尚未开放。");
       const { getRuntimeRequestActor } = await import("@/lib/server/runtime-actor");
       const { readAiEnvironment } = await import("@/lib/server/ai-environment");
       const actor = await getRuntimeRequestActor(request), environment = readAiEnvironment();
       assertPublicImageGenerationActor(actor, environment);
+      requirePublicModelOption({ optionId: body.optionId, modelId: body.modelId, resolution: body.resolution, quality: body.quality });
       assertGenerationRuntime(body.modelId as never, environment);
       context = { production: true };
     }
     const quote = quoteGenerationPrice({
+      optionId: body.optionId,
       modelId: body.modelId,
       purpose: body.purpose,
       requestedResolution: body.resolution,

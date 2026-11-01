@@ -1,3 +1,4 @@
+import { requirePublicModelOption } from "./public-model-option";
 import { validLocalEdit, localEditUsesPrompt } from "@/lib/domain/local-edit";
 import { isBareShellInstruction } from "@/lib/domain/bare-shell";
 import { createHash } from "node:crypto";
@@ -117,6 +118,7 @@ export function referenceAssetKindsForWorkflow(
 }
 
 export type CreateJobInput = {
+  optionId?: string;
   sourceAssetId: string | null;
   stylePresetId: string;
   designSchemeId: string | null;
@@ -210,7 +212,7 @@ export function parseCreateJobInput(value: unknown): CreateJobInput {
     "resolution",
     outputResolutions,
   );
-  const resolution: EffectiveResolution = purpose === "preview"
+  const resolution: EffectiveResolution = purpose === "preview" && body.optionId === undefined
     ? imageModelPreviewResolution(providerPreference)
     : requestedResolution;
   const aspectRatio = requireEnum(
@@ -224,7 +226,9 @@ export function parseCreateJobInput(value: unknown): CreateJobInput {
     outputQualities,
   );
   if (!imageModelSupportsQuality(providerPreference, requestedQuality)) throw new ApiError(400, "PROVIDER_QUALITY_UNSUPPORTED", "当前模型不支持所选质量档位。", { field: "quality" });
-  const quality = purpose === "preview" ? "draft" : requestedQuality;
+  const optionId = body.optionId === undefined ? undefined : requireString(body.optionId, "optionId", { max: 80 });
+  if (optionId) requirePublicModelOption({ optionId, modelId: providerPreference, resolution: requestedResolution, quality: requestedQuality });
+  const quality = purpose === "preview" && !optionId ? "draft" : requestedQuality;
   const visualRealismProvided = body.visualRealism !== undefined;
   if (visualRealismProvided && workflowType !== "concept" && workflowType !== "advanced") {
     throw new ApiError(400, "INVALID_FIELD", "visualRealism 仅适用于 concept 或 advanced 工作流。", { field: "visualRealism" });
@@ -388,7 +392,7 @@ export function parseCreateJobInput(value: unknown): CreateJobInput {
     effectiveResolution: resolution,
   };
   const normalized = {
-    ...normalizedWithoutSpaceType,
+    ...(optionId ? { optionId, optionVersion: "public-model-options-v1-20261031" } : {}),    ...normalizedWithoutSpaceType,
     ...((workflowType === "concept" || workflowType === "advanced") ? { spaceType } : {}),
     ...(workflowType === "concept" ? { designSchemeId } : {}),
   };
@@ -419,6 +423,7 @@ export function parseCreateJobInput(value: unknown): CreateJobInput {
     effectiveResolution: resolution,
   };
   return {
+    ...(optionId ? { optionId } : {}),
     ...normalized,
     spaceType,
     designSchemeId: designSchemeId ?? null,
@@ -485,7 +490,7 @@ export function parseAdditionalReferencesJson(value: unknown, workflowType: Work
 }
 
 export function isCompatibleReplayHash(input: {
-  requestHash: string; previousRequestHash: string; legacyRequestHash: string; purpose: JobPurpose;
+  optionId?: string; requestHash: string; previousRequestHash: string; legacyRequestHash: string; purpose: JobPurpose;
   advancedSettingsProvided: boolean; additionalReferences?: AdditionalReference[];
   preVisualRealismRequestHash?: string; preSelfServiceV2RequestHash?: string;
   visualRealismProvided?: boolean; legacyPreviewRequestHash?: string;
@@ -497,6 +502,7 @@ export function isCompatibleReplayHash(input: {
   preNeutralStyleRequestHash?: string | null; preNeutralStylePreSpaceTypeRequestHash?: string | null;
 }, existingHash: string): boolean {
   if (existingHash === input.requestHash) return true;
+  if (input.optionId) return false;
   if ((input.workflowType === "advanced" || input.workflowType === "floorplan") && (existingHash === input.preNeutralStyleRequestHash || existingHash === input.preNeutralStylePreSpaceTypeRequestHash)) return true;
   if (input.designSchemeProvided) return false;
   if (input.workflowType === "concept" && input.preV2DefaultSchemeRequestHash === existingHash) return true;

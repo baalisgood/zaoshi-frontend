@@ -33,14 +33,14 @@ test("domestic model resolution options match the server capability matrix", () 
   assert.equal(normalizeDomesticImageResolution(legacyTemplateModel, "1K"), "2K");
 });
 
-test("all three workbenches derive resolution choices from the selected model", async () => {
+test("all three workbenches derive resolution choices from the selected public option and hide quality controls", async () => {
   const paths = [
     "../../components/studio/InteriorStudio.tsx",
     "../../components/studio/AdvancedStudio.tsx",
     "../../components/studio/SelfServiceStudio.tsx",
   ];
   const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), "utf8")));
-  assert.ok(sources.every((source) => /imageModelResolutionOptions/u.test(source) && /normalizeImageResolution/u.test(source)));
+  assert.ok(sources.every((source) => /selectedResolutionOptions/u.test(source) && /normalizeImageResolution/u.test(source)));
   assert.ok(sources.slice(0, 2).every((source) => /normalizeKnownImageModel/u.test(source) && /normalizeImageResolution\(templateProvider,\s*config\.resolution\)/u.test(source) && !/normalizeDomesticImageModel\(/u.test(source)));
   for (const source of sources) {
     assert.match(source, /<Segmented label="清晰度"/u);
@@ -50,14 +50,13 @@ test("all three workbenches derive resolution choices from the selected model", 
   }
   assert.match(sources[2], /nearestAspectRatio\(references\[0\]\)/u);
   assert.match(sources[2], /label="画面比例"[\s\S]*disabled: true[\s\S]*当前自动比例[\s\S]*画面比例自动匹配，不可手动修改/u);
-  assert.ok(sources.every((source) => /ImageModelSelect value=\{provider\}/u.test(source) && /QualityField model=\{provider\}/u.test(source)));
+  assert.ok(sources.every((source) => /ImageModelSelect value=\{provider\}/u.test(source) && !/<QualityField/u.test(source)));
   const fields = await readFile(new URL("../../components/studio/StudioFields.tsx", import.meta.url), "utf8");
   assert.match(fields, /ImageModelSelect[\s\S]*ModelCapabilityDetails model=\{value\}/u);
   assert.match(sources[2], /restoreSelfServiceResolution\(nextProvider, config\)/u);
   assert.doesNotMatch(sources[2], /domesticImageModelQualityResolution/u);
-  assert.match(fields, /imageModelOptions\.filter\(option => privateTest === true \|\| isDomesticImageModel\(option\.value\)\)/u);
-  assert.match(fields, /available\.map/u);
-  assert.match(fields, /disabled=\{privateTest === undefined\}/u);
+  assert.match(fields, /publicModelOptions\.map/u);
+  assert.match(fields, /export function QualityField/u);
   assert.doesNotMatch(fields, /onChange\("doubao-seedream-4-5-251128"\)/u);
   assert.ok(sources.every((source) => !/setProvider\("doubao-seedream-4-5-251128"\)/u.test(source)));
 });

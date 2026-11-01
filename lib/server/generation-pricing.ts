@@ -12,6 +12,9 @@ import { imageModelCapabilities, imageModelPreviewResolution, imageModelSupports
 import { assertPrivateTestActive, assertPrivateTestActor, type PrivateTestConfig } from "./private-test-policy";
 import type { RequestActor } from "./actor";
 
+import { requirePublicModelOption } from "./public-model-option";
+export const PUBLIC_MODEL_PRICE_VERSION = "public-model-options-v1-20261031";
+
 export const GENERATION_PRICE_VERSION = "cn-image-v2-20261005";
 export const OVERSEAS_IMAGE_PRICE_VERSION = "overseas-image-v2-20261005";
 export const OVERSEAS_PRIVATE_TEST_PRICE_VERSION = "private-test-overseas-reservation-v1-20260930";
@@ -30,7 +33,7 @@ const outputCostMicroCny: Record<DomesticImageModel, Partial<Record<Resolution, 
 };
 
 export type GenerationPriceQuote = {
-  priceVersion: typeof GENERATION_PRICE_VERSION | typeof OVERSEAS_PRIVATE_TEST_PRICE_VERSION | typeof OVERSEAS_IMAGE_PRICE_VERSION;
+  priceVersion: typeof PUBLIC_MODEL_PRICE_VERSION | typeof GENERATION_PRICE_VERSION | typeof OVERSEAS_PRIVATE_TEST_PRICE_VERSION | typeof OVERSEAS_IMAGE_PRICE_VERSION;
   modelId: ImageModel;
   purpose: Purpose;
   operationType: "text-to-image" | "image-to-image" | "multi-reference";
@@ -48,6 +51,7 @@ export type GenerationPriceQuote = {
 };
 
 export function quoteGenerationPrice(input: {
+  optionId?: unknown;
   modelId: unknown;
   purpose: unknown;
   requestedResolution: unknown;
@@ -56,6 +60,7 @@ export function quoteGenerationPrice(input: {
   quality?: unknown;
   aspectRatio?: unknown;
 }, context?: { privateTest?: { config: PrivateTestConfig; actor: RequestActor }; production?: true }): GenerationPriceQuote {
+  const publicTuple = input.optionId !== undefined ? requirePublicModelOption({ optionId: input.optionId, modelId: input.modelId, resolution: input.requestedResolution, quality: input.quality }) : undefined;
   const aspectRatio = input.aspectRatio ?? "4:3";
   if (typeof aspectRatio !== "string" || !["1:1", "4:3", "3:2", "16:9", "9:16"].includes(aspectRatio)) invalid("画面比例无效。", "aspectRatio");
   if (isOverseasImageModel(input.modelId)) {
@@ -70,16 +75,16 @@ export function quoteGenerationPrice(input: {
     if (!imageModelSupportsQuality(modelId, input.quality ?? "standard")) invalid("当前模型不支持所选质量。", "quality");
     const inputImageCount = Number(input.inputImageCount);
     const outputCount = input.purpose === "preview" ? 1 : Number(input.outputCount);
-    const effectiveResolution = input.purpose === "preview" ? imageModelPreviewResolution(modelId) : input.requestedResolution;
-    const quality = normalizeImageQuality(modelId, input.purpose === "preview" ? "draft" : input.quality ?? "standard");
+    const effectiveResolution = input.purpose === "preview" && !publicTuple ? imageModelPreviewResolution(modelId) : input.requestedResolution;
+    const quality = normalizeImageQuality(modelId, input.purpose === "preview" && !publicTuple ? "draft" : input.quality ?? "standard");
     if (context?.privateTest) {
-    return { priceVersion: OVERSEAS_PRIVATE_TEST_PRICE_VERSION, modelId, purpose: input.purpose, effectiveResolution: input.purpose === "preview" ? imageModelPreviewResolution(modelId) : input.requestedResolution, quality, operationType: inputImageCount === 0 ? "text-to-image" : inputImageCount === 1 ? "image-to-image" : "multi-reference", inputImageCount, billableInputImageCount: 0, outputCount, outputCreditsPerImage: 1, inputCredits: 0, amountPerItem: 1, totalCredits: outputCount, privateTestOnly: true, billingMode: "private-test-reservation" };
+    return { priceVersion: OVERSEAS_PRIVATE_TEST_PRICE_VERSION, modelId, purpose: input.purpose, effectiveResolution: input.purpose === "preview" && !publicTuple ? imageModelPreviewResolution(modelId) : input.requestedResolution, quality, operationType: inputImageCount === 0 ? "text-to-image" : inputImageCount === 1 ? "image-to-image" : "multi-reference", inputImageCount, billableInputImageCount: 0, outputCount, outputCreditsPerImage: 1, inputCredits: 0, amountPerItem: 1, totalCredits: outputCount, privateTestOnly: true, billingMode: "private-test-reservation" };
     }
     const cost = overseasCost(modelId, effectiveResolution, quality, aspectRatio as OutputAspectRatio);
     const outputCreditsPerImage = costCredits(cost.base);
     const amountPerItem = costCredits(cost.base + inputImageCount * cost.perInput);
     const inputCredits = amountPerItem - outputCreditsPerImage;
-    return { priceVersion: OVERSEAS_IMAGE_PRICE_VERSION, modelId, purpose: input.purpose, effectiveResolution, quality, operationType: inputImageCount === 0 ? "text-to-image" : inputImageCount === 1 ? "image-to-image" : "multi-reference", inputImageCount, billableInputImageCount: inputImageCount, outputCount, outputCreditsPerImage, inputCredits, amountPerItem, totalCredits: amountPerItem * outputCount };
+    return { priceVersion: publicTuple ? PUBLIC_MODEL_PRICE_VERSION : OVERSEAS_IMAGE_PRICE_VERSION, modelId, purpose: input.purpose, effectiveResolution, quality, operationType: inputImageCount === 0 ? "text-to-image" : inputImageCount === 1 ? "image-to-image" : "multi-reference", inputImageCount, billableInputImageCount: inputImageCount, outputCount, outputCreditsPerImage, inputCredits, amountPerItem, totalCredits: amountPerItem * outputCount };
 
   }
   if (!isDomesticImageModel(input.modelId)) invalid("图像模型无效。", "modelId");

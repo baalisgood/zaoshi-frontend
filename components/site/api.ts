@@ -368,16 +368,16 @@ export class GenerationSubmissionError extends Error {
   constructor(public readonly status: number, public readonly code: string | undefined, message: string) { super(message); this.name = "GenerationSubmissionError"; }
 }
 
-export async function quoteGeneration(payload: { modelId: string; purpose: "preview" | "final"; resolution: string; inputImageCount: number; outputCount: number; quality?: string ; aspectRatio: string }, signal?: AbortSignal): Promise<GenerationPriceQuote> {
-  const publicModel = !payload.modelId.startsWith("gpt-") && !payload.modelId.startsWith("gemini-");
-  const response = publicModel ? await fetch(`/api/prices?${new URLSearchParams({ modelId: payload.modelId, resolution: payload.resolution, inputImageCount: String(payload.inputImageCount), outputCount: String(payload.outputCount), aspectRatio: payload.aspectRatio })}`, { signal }) : await fetch("/api/jobs/quote", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload), signal });
+export async function quoteGeneration(payload: { optionId?: string; modelId: string; purpose: "preview" | "final"; resolution: string; inputImageCount: number; outputCount: number; quality?: string ; aspectRatio: string }, signal?: AbortSignal, privateTest = false): Promise<GenerationPriceQuote> {
+  const publicModel = Boolean(payload.optionId) && !privateTest;
+  const response = publicModel ? await fetch(`/api/prices?${new URLSearchParams({ optionId: payload.optionId ?? "", quality: payload.quality ?? "auto", purpose: payload.purpose, modelId: payload.modelId, resolution: payload.resolution, inputImageCount: String(payload.inputImageCount), outputCount: String(payload.outputCount), aspectRatio: payload.aspectRatio })}`, { signal }) : await fetch("/api/jobs/quote", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload), signal });
   if (!response.ok) throw new Error(await responseMessage(response, "当前无法确认积分价格。"));
   const quote = record((await response.json() as Record<string, unknown>).quote);
   if (!quote || typeof quote.priceVersion !== "string" || typeof quote.totalCredits !== "number" || typeof quote.amountPerItem !== "number") throw new Error("报价服务返回的数据无效。");
   return quote as GenerationPriceQuote;
 }
 
-export async function quoteFinalizedGeneration(previewId: string, payload: { resolution: string; outputCount: number; quality?: string }, signal?: AbortSignal): Promise<GenerationPriceQuote> {
+export async function quoteFinalizedGeneration(previewId: string, payload: { optionId?: string; providerPreference?: string; resolution: string; outputCount: number; quality?: string }, signal?: AbortSignal): Promise<GenerationPriceQuote> {
   const response = await fetch(`/api/jobs/${encodeURIComponent(previewId)}/quote`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload), signal });
   if (!response.ok) throw new Error(await responseMessage(response, "当前无法确认高清成品积分价格。"));
   const quote = record((await response.json() as Record<string, unknown>).quote);

@@ -3,13 +3,14 @@
 /* eslint-disable @next/next/no-img-element -- Blob/API image URLs need native image sizing and object-fit previews. */
 
 import { useSession, useSessionError, loadSession, requireClientAccess } from "@/components/site/session";
-import { isDomesticImageModel } from "@/lib/domain/domestic-image-models";
-import { Dispatch, SetStateAction, ChangeEvent, DragEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getPublicModelOption, publicModelOptions } from "@/lib/domain/public-model-options";
+import { Dispatch, SetStateAction, ChangeEvent, DragEvent, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AssetRecord, readImageDimensions, StyleRecord, listStyles } from "@/components/site/api";
 import { loadDraftImage, removeDraftImage, saveDraftImage } from "@/components/studio/browser-drafts";
 import { imageFitsModel } from "@/components/studio/input-limits";
 import { ACCEPTED_IMAGE_MIME_TYPES, MAX_INPUT_IMAGE_BYTES, MAX_INPUT_IMAGE_PIXELS, MAX_INPUT_IMAGE_SIDE } from "@/lib/domain/image-input-limits";
-import { imageModelCapabilities, imageModelOptions, imageQualityOptions, type ImageModel, type ImageQuality } from "@/lib/domain/image-models";
+import { imageModelCapabilities, imageQualityOptions, type ImageModel, type ImageQuality } from "@/lib/domain/image-models";
 
 export type UploadedImage = AssetRecord & { width?: number; height?: number; draftVersion?: string };
 export type UploadGate = { disabledReason?: string; begin: (file: File) => boolean; complete: () => boolean; finish: (success: boolean) => void; settle: () => void };
@@ -239,17 +240,45 @@ export function ImageUploadField({
 }
 
 export function StylePicker({ styles, value, onChange }: { styles: StyleRecord[]; value: string; onChange: (id: string) => void }) {
+  const previewId = useId();
+  const [preview, setPreview] = useState<{ style: StyleRecord; anchor: HTMLElement; keyboard: boolean; left: number; top: number; width: number; height: number }>();
+  const showPreview = useCallback((style: StyleRecord, target: HTMLElement, keyboard = false) => {
+    if (!style.imageUrl) return;
+    const rect = target.getBoundingClientRect();
+    const left = rect.right + 16;
+    const width = Math.min(420, window.innerWidth - left - 12);
+    const height = Math.min(330, rect.bottom - 12);
+    if (rect.bottom <= 0 || rect.bottom > window.innerHeight || width <= rect.right - rect.left || height <= rect.bottom - rect.top) {
+      setPreview(undefined);
+      return;
+    }
+    setPreview({ style, anchor: target, keyboard, width, height, left, top: rect.bottom - height });
+  }, []);
+  useEffect(() => {
+    if (!preview) return;
+    const dismiss = () => setPreview(undefined);
+    const scroll = () => {
+      const rect = preview.anchor.getBoundingClientRect();
+      if (preview.keyboard && preview.anchor.closest("button")?.matches(":focus-visible") && rect.bottom > 0 && rect.top < window.innerHeight) showPreview(preview.style, preview.anchor, true);
+      else dismiss();
+    };
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };
+    window.addEventListener("scroll", scroll, true);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("keydown", keydown);
+    return () => { window.removeEventListener("scroll", scroll, true); window.removeEventListener("resize", dismiss); window.removeEventListener("keydown", keydown); };
+  }, [preview, showPreview]);
   return (
-    <div className="style-scroll" role="group" aria-label="设计风格">
+    <><div className="style-scroll" role="group" aria-label="设计风格">
       <div className="style-picker-grid">
         {styles.map((style) => (
-          <button key={style.id} className={`style-option ${value === style.id ? "selected" : ""}`} type="button" aria-pressed={value === style.id} onClick={() => onChange(style.id)}>
-            <span className="style-option-image">{style.imageUrl ? <img src={style.imageUrl} alt="" /> : <span aria-hidden="true">◇</span>}{value === style.id && <i aria-hidden="true">✓</i>}</span>
+          <button key={style.id} className={`style-option ${value === style.id ? "selected" : ""}`} type="button" aria-pressed={value === style.id} aria-describedby={preview?.style.id === style.id ? previewId : undefined} onClick={() => onChange(style.id)} onFocus={event => { if (event.currentTarget.matches(":focus-visible")) { const image = event.currentTarget.querySelector<HTMLElement>(".style-option-image"); if (image) showPreview(style, image, true); } }} onBlur={() => setPreview(undefined)} onPointerDown={event => { if (event.pointerType === "touch") setPreview(undefined); }}>
+            <span className="style-option-image" onPointerEnter={event => { if (event.pointerType === "mouse") showPreview(style, event.currentTarget); }} onPointerLeave={() => { if (!preview?.keyboard) setPreview(undefined); }}>{style.imageUrl ? <img src={style.imageUrl} alt="" /> : <span aria-hidden="true">◇</span>}{value === style.id && <i aria-hidden="true">✓</i>}</span>
             <strong>{style.name}</strong><small>{style.description}</small>
           </button>
         ))}
       </div>
-    </div>
+    </div>{preview && createPortal(<div id={previewId} role="tooltip" className="smart-style-preview" style={{ left: preview.left, top: preview.top, width: preview.width, height: preview.height }}><img src={preview.style.imageUrl} alt={`${preview.style.name}完整风格参考图`} /></div>, document.body)}</>
   );
 }
 
@@ -269,11 +298,10 @@ export function usePrivateTestMode(): boolean | undefined {
   return session ? session.authMode === "private-test" : undefined;
 }
 
-export function ImageModelSelect({ value, onChange }: { value: ImageModel; onChange: (value: ImageModel) => void }) {
+export function ImageModelSelect({ value, optionId, onOptionChange }: { value: ImageModel; onChange?: (value: ImageModel) => void; optionId?: string; onOptionChange?: (id: string) => void }) {
   const privateTest = usePrivateTestMode();
-  const unavailable = privateTest === false && !isDomesticImageModel(value);
-  const available = imageModelOptions.filter(option => privateTest === true || isDomesticImageModel(option.value));
-  return <><label className="select-field image-model-field"><span>图像模型</span><select disabled={privateTest === undefined} value={unavailable ? "" : value} onChange={event => onChange(event.target.value as ImageModel)}>{unavailable && <option value="" disabled>旧稿模型暂不可用，请重新选择</option>}{available.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>{(privateTest === undefined || unavailable) && <small className="field-description">{privateTest === undefined ? "正在确认模型权限。" : "旧稿模型暂不公开；原草稿与历史仍保留，请选择一个国内模型继续。"}</small>}</label>{!unavailable && <ModelCapabilityDetails model={value} privateTest={privateTest} />}</>;
+  const option = getPublicModelOption(optionId);
+  return <><label className="select-field image-model-field"><span>图像模型</span><select value={option?.id ?? ""} onChange={event => onOptionChange?.(event.target.value)}>{!option && <option value="" disabled>请选择当前模型规格</option>}{publicModelOptions.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select>{!option && <small className="field-description">旧稿与历史仍保留，请重新选择模型规格。</small>}</label>{option && <ModelCapabilityDetails model={value} privateTest={privateTest} />}</>;
 }
 
 export function OutputCounter({ value, onChange, busy }: { value: number; onChange: Dispatch<SetStateAction<number>>; busy: boolean }) {

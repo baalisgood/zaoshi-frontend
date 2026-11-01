@@ -51,6 +51,7 @@ export type AdvancedGenerationPayloadInput = {
   customPrompt?: string;
   lightingPreset: string;
   preservationMode: string;
+  optionId?: string;
   providerPreference: string;
   referenceAssetId?: string;
   additionalReferences?: { assetId: string; role: "furnishing" | "structure" | "material" | "lighting-color" | "composition" }[];
@@ -79,7 +80,7 @@ export function buildAdvancedGenerationPayload(input: AdvancedGenerationPayloadI
     return {
       workflowType: "advanced", purpose: "final", sourceAssetId: input.sourceAssetId, editInstruction: BARE_SHELL_INSTRUCTION,
       lightingPreset: "noon", preservationMode: "structure", spaceType: "unspecified",
-      providerPreference: input.providerPreference, resolution: input.resolution, aspectRatio: input.aspectRatio, quality: input.quality, outputCount: input.outputCount,
+      optionId: input.optionId, providerPreference: input.providerPreference, resolution: input.resolution, aspectRatio: input.aspectRatio, quality: input.quality, outputCount: input.outputCount,
       ...(input.billingMode ? { billingMode: input.billingMode } : {}),
       expectedPriceVersion: input.expectedPriceVersion, expectedTotalCredits: input.expectedTotalCredits, idempotencyKey: input.idempotencyKey,
     };
@@ -92,7 +93,7 @@ export function buildAdvancedGenerationPayload(input: AdvancedGenerationPayloadI
       additionalReferences: [{ assetId: local.annotationAssetId, role: "selection" }, ...local.referenceAssetIds.map((assetId) => ({ assetId, role: "furnishing" }))],
       editInstruction: localEditInstruction(local.operation), customPrompt: local.operation === "prompt" ? input.customPrompt ?? "" : "",
       lightingPreset: "noon", preservationMode: "structure", spaceType: "unspecified",
-      providerPreference: input.providerPreference, resolution: input.resolution, aspectRatio: input.aspectRatio, quality: input.quality, outputCount: input.outputCount,
+      optionId: input.optionId, providerPreference: input.providerPreference, resolution: input.resolution, aspectRatio: input.aspectRatio, quality: input.quality, outputCount: input.outputCount,
       ...(input.billingMode ? { billingMode: input.billingMode } : {}),
       expectedPriceVersion: input.expectedPriceVersion, expectedTotalCredits: input.expectedTotalCredits, idempotencyKey: input.idempotencyKey,
     };
@@ -104,7 +105,7 @@ export function buildAdvancedGenerationPayload(input: AdvancedGenerationPayloadI
     customPrompt: input.customPrompt ?? "",
     lightingPreset: input.lightingPreset,
     preservationMode: input.preservationMode,
-    providerPreference: input.providerPreference,
+    optionId: input.optionId, providerPreference: input.providerPreference,
     ...(input.referenceAssetId ? { referenceAssetId: input.referenceAssetId } : {}),
     ...(input.additionalReferences?.length ? { additionalReferences: input.additionalReferences } : {}),
     outputCount: input.outputCount,

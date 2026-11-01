@@ -10,3 +10,10 @@ Read `handoff.md`, this file, `README.md`, the applicable source and tests befor
 - Run typecheck, lint and affected tests. Build both Web and consumer for shared runtime changes. UI changes require real browser verification; mock tests do not prove OAuth/payment/provider E2E.
 - Do not push, deploy, change repository visibility, migrate live data or make paid provider calls without authorization covering that action. Source publication does not authorize deployment.
 - Keep `handoff.md` current with scope, changed files, actual commands/results, independent review/QA, limitations and rollback. Separate historical evidence from current checks.
+
+## Provider and subscription investigations
+
+- Distinguish the website's Sub2API gateway key from the upstream account credential. Verify the selected group, upstream account type and running relay version read-only; never infer official API billing or authorization from a group name or an API-shaped request.
+- Distinguish ChatGPT web image generation, Codex Images OAuth and the public Images API. Serialized `model`/`quality` values and mock tests do not establish that an upstream account supports or honors those values. Do not describe a web UI as a fixed API quality tier without official evidence.
+- Keep user-visible provider/model names accurate. Do not silently map a named model to a different provider. Subscription quotas, API credits, commercial permissions and regional requirements need separate, dated checks against official sources; connectivity is not proof of permission or regulatory exemption.
+- Research does not authorize account substitution, relay changes, purchases, paid generation or deployment. Keep live account/group IDs, credential fingerprints and operational records out of these public documents; record sanitized findings and verification limits in `handoff.md`.

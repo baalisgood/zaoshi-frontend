@@ -1,5 +1,10 @@
-import { domesticImageModelValues, domesticImageModelCapabilities } from "@/lib/domain/domestic-image-models";
+import { publicModelOptions, resolvePublicModelOption } from "@/lib/domain/public-model-options";
+import { imageModelCapabilities } from "@/lib/domain/image-models";
 import { quoteGenerationPrice } from "./generation-pricing";
 export function publicPriceCatalog() {
- return domesticImageModelValues.map(modelId=>({modelId,label:domesticImageModelCapabilities[modelId].label,resolutions:domesticImageModelCapabilities[modelId].supportedResolutions,maxInputs:domesticImageModelCapabilities[modelId].maxInputImages,prices:domesticImageModelCapabilities[modelId].supportedResolutions.map(resolution=>Array.from({length:domesticImageModelCapabilities[modelId].maxInputImages+1},(_,inputImageCount)=>quoteGenerationPrice({modelId,purpose:"final",requestedResolution:resolution,inputImageCount,outputCount:1}).amountPerItem))}));
+  return publicModelOptions.map(option => ({ optionId: option.id, label: option.label, aspectRatio: "4:3", resolutions: option.resolutions, prices: option.resolutions.map(resolution => {
+    const tuple = resolvePublicModelOption(option.id, resolution)!;
+    const maxInputs = imageModelCapabilities[tuple.model].maxInputImages;
+    return { modelId: tuple.model, resolution, quality: tuple.quality, maxInputs, amounts: Array.from({ length: maxInputs + 1 }, (_, inputImageCount) => quoteGenerationPrice({ optionId: option.id, modelId: tuple.model, quality: tuple.quality, purpose: "final", requestedResolution: resolution, inputImageCount, outputCount: 1, aspectRatio: "4:3" }, { production: true }).amountPerItem) };
+  }) }));
 }

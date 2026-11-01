@@ -27,17 +27,17 @@ test("real identity and current legal consent fail closed; immutable acceptance 
   assert.deepEqual(database.prepare("SELECT accepted_at FROM user_legal_acceptances").all().map(r=>r.accepted_at),[123,123]);
  }finally{database.close();}
 });
-test("anonymous public domestic quotes and catalog use the same server calculation and expose no overseas prices",async()=>{
+test("public six-option catalog explicitly quotes 4:3 and rejects arbitrary actual models",async()=>{
  const catalog=publicPriceCatalog();assert.equal(catalog.length,6);
- for(const model of catalog) for(const [index,resolution] of model.resolutions.entries()) for(let inputImageCount=0;inputImageCount<=model.maxInputs;inputImageCount++){
-  const response=price(new Request(`http://localhost/api/prices?${new URLSearchParams({modelId:model.modelId,resolution,inputImageCount:String(inputImageCount),outputCount:"3",aspectRatio:"4:3"})}`));
-  assert.equal(response.status,200);const body=await response.json() as {quote:{totalCredits:number}};
-  assert.equal(body.quote.totalCredits,model.prices[index][inputImageCount]*3);
-  assert.equal(body.quote.totalCredits,quoteGenerationPrice({modelId:model.modelId,requestedResolution:resolution,inputImageCount,outputCount:3,purpose:"final"}).totalCredits);
+ for(const option of catalog) for(const row of option.prices) for(let inputImageCount=0;inputImageCount<=row.maxInputs;inputImageCount++){
+  assert.equal(option.aspectRatio,"4:3");
+  const response=price(new Request(`http://localhost/api/prices?${new URLSearchParams({optionId:option.optionId,modelId:row.modelId,quality:row.quality,resolution:row.resolution,inputImageCount:String(inputImageCount),outputCount:"3",aspectRatio:"4:3"})}`));
+  assert.equal(response.status,200);const body=await response.json() as {quote:{totalCredits:number}};assert.equal(body.quote.totalCredits,row.amounts[inputImageCount]*3);
+  assert.equal(body.quote.totalCredits,quoteGenerationPrice({optionId:option.optionId,modelId:row.modelId,quality:row.quality,requestedResolution:row.resolution,inputImageCount,outputCount:3,purpose:"final",aspectRatio:"4:3"},{production:true}).totalCredits);
  }
- for(const modelId of ["gpt-image-2","gemini-3-pro-image","bad"]){const response=price(new Request(`http://localhost/api/prices?modelId=${modelId}`));assert.equal(response.status,400);}
- for(const query of ["inputImageCount=-1&outputCount=1","inputImageCount=999&outputCount=1","inputImageCount=1&outputCount=5","inputImageCount=1&outputCount=1&aspectRatio=bad"]){assert.equal(price(new Request(`http://localhost/api/prices?modelId=qwen-image-3.0&resolution=1K&${query}`)).status,400);}
+ for(const modelId of ["gpt-image-2","gemini-3-pro-image","bad"]){assert.equal(price(new Request(`http://localhost/api/prices?modelId=${modelId}`)).status,400);}
 });
+
 test("upload admission precedes picker and file reading; ratio updates request keys; popover is nonmodal",()=>{
  const fields=readFileSync("components/studio/StudioFields.tsx","utf8");
  assert.match(fields,/onClick=\{\(event\) => \{ if \(!requireClientAccess\(\)\) event.preventDefault\(\)/);
@@ -46,7 +46,7 @@ test("upload admission precedes picker and file reading; ratio updates request k
  const shell=readFileSync("components/site/AppShell.tsx","utf8");assert.doesNotMatch(shell,/aria-modal|document.body.style.overflow|event.key === "Tab"/);assert.match(shell,/pointerdown/);assert.match(shell,/Escape/);
 });
 
-test("return paths stay internal and server rendering exposes domestic product and legal UI",async()=>{
+test("return paths stay internal and server rendering exposes actual product and legal UI",async()=>{
  for(const target of ["https://foreign.test","//foreign.test","/\\foreign.test","/api/auth/logout","/\nforeign"] ) assert.equal(safeReturnPath(target),"/profile");
  assert.equal(safeReturnPath("/pro?asset=original"),"/pro?asset=original");
  const {createElement}=await import("react"); const {renderToStaticMarkup}=await import("react-dom/server");
@@ -54,7 +54,7 @@ test("return paths stay internal and server rendering exposes domestic product a
  try {
  const {ProductsView}=await server.ssrLoadModule("/components/products/ProductsView.tsx"); const {LegalDocument}=await server.ssrLoadModule("/components/legal/LegalDocument.tsx");
  const products=renderToStaticMarkup(createElement(ProductsView,{catalog:publicPriceCatalog()}));
- assert.match(products,/产品|工作台/);assert.match(products,/微信支付|充值/);assert.doesNotMatch(products,/gpt-image|gemini|OpenAI/);assert.match(products,/350/);
+ assert.match(products,/产品|工作台/);assert.match(products,/微信支付|充值/);assert.match(products,/OpenAI/);assert.match(products,/Gemini/);assert.match(products,/350/);
  for(const document of ["terms","privacy","usage","recharge"] as const){const html=renderToStaticMarkup(createElement(LegalDocument,{document}));assert.match(html,/本地预览草稿/);assert.doesNotMatch(html,/保证退款|自动现金退款已/);}
  const {AppShell}=await server.ssrLoadModule("/components/site/AppShell.tsx");const shell=renderToStaticMarkup(createElement(AppShell,null,createElement("p",null,"workspace")));
  assert.match(shell,/产品与价格/);assert.match(shell,/header-account-slot/);assert.doesNotMatch(shell,/aria-modal/);

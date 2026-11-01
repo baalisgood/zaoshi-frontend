@@ -1,4 +1,5 @@
 "use client";
+import { getPublicModelOption } from "@/lib/domain/public-model-options";
 
 import { loadSession } from "@/components/site/session";
 import { localEditOptions, parseLocalEditInstruction, localEditUsesPrompt } from "@/lib/domain/local-edit";
@@ -198,7 +199,7 @@ export function submittedParameterSummary(payload: Record<string, unknown>): str
   const fields = Object.entries(labels).flatMap(([key, label]) => {
     if (local && ["spaceType", "lightingPreset", "lampState", "preservationMode", "visualRealism", "colorTemperatureKelvin", "advancedSettings"].includes(key)) return [];
     if (local && key === "editInstruction") return [`局部修改：${localEditUsesPrompt(payload.editInstruction) && typeof payload.customPrompt === "string" && payload.customPrompt.trim() ? "按提示词修改" : localEditOptions.find((option) => option.value === operation)?.label}`];
-    const value = key === "quality" && payload.purpose === "preview" ? "draft" : payload[key];
+    const value = key === "quality" && payload.purpose === "preview" && !payload.optionId ? "draft" : payload[key];
     return value === undefined || value === null || value === "" ? [] : [`${label}：${typeof value === "object" ? JSON.stringify(value) : String(value)}`];
   });
   return fields.length ? fields.join("\n") : "无额外参数";
@@ -279,12 +280,12 @@ export async function submitGenerationDraft(payload: Record<string, unknown>): P
   if (pending.resolvedPayload) pending.resolvedPayload = { ...pending.resolvedPayload, draftScope: pending.draftScope };
   const privateTest = await privateTestModeForSubmission(window.location.origin, pending.confirmedAt);
   if (requiresFreshPaidConfirmation(pending.confirmedAt, privateTest)) {
-    const label = imageModelCapabilities[model].label;
+    const label = getPublicModelOption(payload.optionId)?.label ?? imageModelCapabilities[model].label;
     const preview = payload.purpose === "preview";
     const purpose = preview ? "参考图" : "成品图";
     const credits = Number(payload.expectedTotalCredits);
     if (!Number.isSafeInteger(credits) || credits < 1 || typeof payload.expectedPriceVersion !== "string") throw new Error("请等待服务端报价后再提交，图片尚未上传。");
-    const resolution = preview ? capability.supportedResolutions[0] : String(payload.resolution);
+    const resolution = preview && !payload.optionId ? capability.supportedResolutions[0] : String(payload.resolution);
     const outputCount = preview ? 1 : Number(payload.outputCount);
     if (!Number.isSafeInteger(outputCount) || outputCount < 1 || !(capability.supportedResolutions as readonly string[]).includes(resolution)) throw new Error("输出规格与服务端报价不一致，图片尚未上传。");
     const workflow = ({ concept: "概念", advanced: "高级", floorplan: "平面图", "self-service": "自助" } as Record<string, string>)[String(payload.workflowType)] ?? "未知";

@@ -123,15 +123,13 @@ test("server-renders the unified admin console without claiming unavailable paym
   assert.match(contentSource, /重试阻塞项/u);
 });
 
-test("visual realism appears only in concept and advanced workbench sources", async () => {
+test("workbenches omit visual realism controls, summaries and submitted configuration", async () => {
   const [concept, advanced, selfService] = await Promise.all([
     readFile(new URL("../components/studio/InteriorStudio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/studio/AdvancedStudio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../components/studio/SelfServiceStudio.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(concept, /视觉表现/u);
-  assert.match(advanced, /视觉表现/u);
-  assert.doesNotMatch(selfService, /visualRealism|视觉表现/u);
+  for (const source of [concept, advanced, selfService]) assert.doesNotMatch(source, /visualRealism|视觉表现/u);
 });
 
 test("home gallery exposes truthful prompt details and three design categories", async () => {
@@ -349,7 +347,7 @@ test("client source keeps responsive, asset-kind and secret boundaries explicit"
   assert.match(css, /\.summary-preview img[^}]*position:absolute[^}]*inset:12px[^}]*width:calc\(100% - 24px\)[^}]*height:calc\(100% - 24px\)/u);
   assert.doesNotMatch(generationView, /<code[^>]*>\{job\.id\}<\/code>/u);
   assert.match(concept, /lampState === "off" \? "自然光"/u);
-  assert.match(fields, /<select[^>]*[\s\S]*available\.map/u);
+  assert.match(fields, /<select[^>]*[\s\S]*publicModelOptions\.map/u);
   assert.match(css, /\.generation-actions \{[^}]*grid-template-columns:minmax\(0,180px\);[^}]*justify-content:start;[^}]*gap:8px;/u);
   assert.doesNotMatch(css, /\.generation-actions[^}]*grid-template-columns:repeat\(2,/u);
   assert.match(css, /@media \(max-width:1100px\)[\s\S]*\.studio-page,.pro-workbench \{ width:calc\(100% - 32px\); \}/u);

@@ -17,10 +17,10 @@ const labels: Record<string, { title: string; note: string; step: number }> = {
   CANCELED: { title: "任务已取消", note: "没有返回可展示结果", step: 0 },
 };
 
-export function GenerationView({ controller, onLocalEdit, resolution = "2K", quality = "standard" }: { controller: GenerationController; onLocalEdit?: (assetId: string, url?: string) => void; resolution?: string; quality?: string }) {
+export function GenerationView({ controller, onLocalEdit, resolution = "2K", quality = "standard", optionId, providerPreference }: { controller: GenerationController; onLocalEdit?: (assetId: string, url?: string) => void; resolution?: string; quality?: string; optionId?: string; providerPreference?: string }) {
   const privateTest = usePrivateTestMode();
   const { job, busy, pollingLost, retry } = controller;
-  const finalizePricing = useFinalizeGenerationPricing(privateTest === false && job?.purpose === "preview" && job.provider !== "mock" ? job.id : undefined, resolution, 1, quality);
+  const finalizePricing = useFinalizeGenerationPricing(privateTest === false && job?.purpose === "preview" && job.provider !== "mock" ? job.id : undefined, resolution, 1, quality, optionId, providerPreference);
   if (!job) return <section className="result-empty"><span aria-hidden="true">⌑</span><strong>结果将在这里出现</strong><p>提交后可继续创建新任务；进度和完成结果会保留在下方任务列表中。</p></section>;
 
   const done = job.status === "SUCCEEDED" || job.status === "PARTIAL_SUCCEEDED";
@@ -52,7 +52,7 @@ export function GenerationView({ controller, onLocalEdit, resolution = "2K", qua
           const reusable = mock || result.moderationStatus !== "REJECTED";
           return <article className="generated-card" key={result.assetId}>
             <div className="generated-image">{result.url ? <img src={result.url} alt={`${bareShell ? "毛坯结构图" : "概念效果图"} ${index + 1}`} /> : <span>结果地址暂不可用</span>}{mock && <b>MOCK · 原图占位</b>}</div>
-            <div className="generated-actions"><div><strong>{bareShell ? "毛坯结构图" : "方案"} {String(index + 1).padStart(2, "0")}</strong><small>{job.model ?? job.provider ?? "图像服务"}</small></div>{bareShell ? <small>请在下方任务列表下载。</small> : reusable ? <span className="action-row"><a href={`/pro?asset=${encodeURIComponent(result.assetId)}`}>高级精修</a>{job.purpose === "preview" && !mock && privateTest === false && <button type="button" disabled={controller.busy || !finalizePricing.quote} onClick={() => { const quote = finalizePricing.quote; if (!quote) return; void controller.finalize({ selectedOutputAssetId: result.assetId, resolution, quality, outputCount: 1, expectedPriceVersion: quote.priceVersion, expectedTotalCredits: quote.totalCredits, idempotencyKey: `finalize:${job.id}:${result.assetId}:${resolution}:${quality}` }); }}>生成高清成品 · {finalizePricing.quote ? `${finalizePricing.quote.totalCredits}积分` : "报价中"}</button>}{onLocalEdit && !mock && <button type="button" onClick={() => onLocalEdit(result.assetId, result.url)}>局部修改</button>}</span> : <small>图片不可继续使用。</small>}</div>
+            <div className="generated-actions"><div><strong>{bareShell ? "毛坯结构图" : "方案"} {String(index + 1).padStart(2, "0")}</strong><small>{job.model ?? job.provider ?? "图像服务"}</small></div>{bareShell ? <small>请在下方任务列表下载。</small> : reusable ? <span className="action-row"><a href={`/pro?asset=${encodeURIComponent(result.assetId)}`}>高级精修</a>{job.purpose === "preview" && !mock && privateTest === false && <button type="button" disabled={controller.busy || !finalizePricing.quote} onClick={() => { const quote = finalizePricing.quote; if (!quote) return; void controller.finalize({ optionId, providerPreference, selectedOutputAssetId: result.assetId, resolution, quality, outputCount: 1, expectedPriceVersion: quote.priceVersion, expectedTotalCredits: quote.totalCredits, idempotencyKey: `finalize:${job.id}:${result.assetId}:${optionId}:${resolution}:${quality}` }); }}>生成高清成品 · {finalizePricing.quote ? `${finalizePricing.quote.totalCredits}积分` : "报价中"}</button>}{onLocalEdit && !mock && <button type="button" onClick={() => onLocalEdit(result.assetId, result.url)}>局部修改</button>}</span> : <small>图片不可继续使用。</small>}</div>
           </article>;
         })}
       </div>

@@ -66,6 +66,28 @@ export function ProfileView({ compact = false, appearance }: { compact?: boolean
   const request = useRef(0);
   const logoutPending = useRef(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [payment, setPayment] = useState<{ scope?: string; status: "loading" | "enabled" | "disabled" | "error" }>({ status: "loading" });
+  const paymentScope = session?.draftScope;
+  const checkPayment = !compact && Boolean(paymentScope) && session?.user.authenticated === true && session.authMode !== "private-test" && !session.privateTest;
+  useEffect(() => {
+    if (!checkPayment || !paymentScope) return;
+    let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+      if (active) { active = false; setPayment({ scope: paymentScope, status: "error" }); }
+    }, 8000);
+    void Promise.resolve().then(async () => {
+      if (!active) return;
+      setPayment({ scope: paymentScope, status: "loading" });
+      const response = await fetch("/api/recharge/catalog", { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("充值状态暂不可用。");
+      const catalog: unknown = await response.json();
+      if (!isRecord(catalog) || typeof catalog.enabled !== "boolean") throw new Error("充值状态格式无法识别。");
+      if (active) setPayment({ scope: paymentScope, status: catalog.enabled ? "enabled" : "disabled" });
+    }).catch(() => { if (active) setPayment({ scope: paymentScope, status: "error" }); }).finally(() => clearTimeout(timeout));
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
+  }, [checkPayment, paymentScope]);
   const load = useCallback(async () => {
     const current = ++request.current;
     setState("loading"); setError("");
@@ -92,6 +114,12 @@ export function ProfileView({ compact = false, appearance }: { compact?: boolean
 
   const loginMethod = snapshot?.authMode === "email" ? "邮箱登录" : snapshot?.authMode === "wechat" ? "微信登录" : snapshot?.authMode === "private-test" ? "SSH 私测登录" : "演示会话";
   const identity = snapshot?.user.authenticated ? (snapshot.authMode === "wechat" ? "微信账户" : snapshot.authMode === "private-test" ? "付费私测账户" : "已登录账户") : "匿名会话";
+  const paymentCopy = {
+    loading: { badge: "正在确认", text: "正在确认充值开放状态。可用与冻结积分以服务端账本为准。" },
+    enabled: { badge: "充值已开放", text: "支持微信扫码充值，请前往积分与充值查看当前套餐和订单状态。可用与冻结积分以服务端账本为准。" },
+    disabled: { badge: "充值暂未开放", text: "当前暂未开放充值。可用与冻结积分以服务端账本为准；请勿向非正式渠道转账。" },
+    error: { badge: "暂时无法确认", text: "暂时无法确认充值状态，请稍后重试或前往积分与充值查看。可用与冻结积分以服务端账本为准。" },
+  }[payment.scope === paymentScope ? payment.status : "loading"];
   if (compact && state === "ready" && snapshot?.user.authenticated) return <div className="profile-page profile-compact profile-menu">
     <div className="profile-menu-identity"><span className="profile-menu-avatar" aria-hidden="true">{snapshot.user.displayName.slice(0, 1)}</span><div className="profile-menu-identity-copy"><div className="profile-menu-title"><h2>{snapshot.user.displayName}</h2>{snapshot.isSiteAdmin && <span className="profile-menu-role">超级管理员</span>}</div>{snapshot.user.email ? <a className="profile-menu-email" href={`mailto:${snapshot.user.email}`}>{snapshot.user.email}</a> : <p>{identity}</p>}{snapshot.authMode === "private-test" && snapshot.privateTest && <span className="status-pill">SSH 私测</span>}</div></div>
     {error && <div className="inline-notice error-text" role="alert">{error}</div>}
@@ -142,7 +170,7 @@ export function ProfileView({ compact = false, appearance }: { compact?: boolean
           </div>
         </section>
         <div className="profile-side">
-          <section className="profile-card beta-card"><div><span className="section-kicker">PRIVATE BETA</span><h2>{snapshot.authMode === "private-test" ? "SSH 付费私测" : "收费与会员"}</h2></div><span className="status-pill">{snapshot.authMode === "private-test" ? "回环私测" : "内测 · 未启用"}</span><p>{snapshot.privateTest ? "开发者私测无需充值积分、每日次数不限；每次只生成 1 张，须等待当前任务完成并确认供应商费用提示。" : snapshot.authMode === "private-test" ? "调试生图无需充值积分；每次仍须确认供应商 API 费用，并遵守每日张数与并发限制。" : "可用与冻结积分以服务端账本为准。真实支付尚在筹备；请勿向非正式渠道转账。"}</p></section>
+          <section className="profile-card beta-card"><div><span className="section-kicker">PRIVATE BETA</span><h2>{snapshot.authMode === "private-test" ? "SSH 付费私测" : "收费与会员"}</h2></div><span className="status-pill">{snapshot.authMode === "private-test" ? "回环私测" : paymentCopy.badge}</span><p>{snapshot.privateTest ? "开发者私测无需充值积分、每日次数不限；每次只生成 1 张，须等待当前任务完成并确认供应商费用提示。" : snapshot.authMode === "private-test" ? "调试生图无需充值积分；每次仍须确认供应商 API 费用，并遵守每日张数与并发限制。" : paymentCopy.text}</p></section>
           <section className="profile-card system-card"><h2>当前数据环境</h2><dl><div><dt>身份</dt><dd>{identity}</dd></div><div><dt>数据存储</dt><dd>{snapshot.persistence === "database" ? "数据库" : snapshot.persistence === "memory-demo" ? "本地演示内存" : snapshot.persistence ?? "服务端未说明"}</dd></div></dl></section>
         </div>
       </div>

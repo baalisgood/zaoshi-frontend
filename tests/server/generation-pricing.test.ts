@@ -118,7 +118,8 @@ test("overseas reservations require verified active private-test context, never 
     const quote = quoteGenerationPrice(input, context);
     assert.equal(quote.totalCredits, 4); assert.equal(quote.amountPerItem, 1); assert.equal(quote.inputCredits, 0); assert.equal(quote.privateTestOnly, true); assert.equal(quote.billingMode, "private-test-reservation");
     const response = await quotePrice(new Request("http://localhost/api/jobs/quote", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, resolution: "1K", privateTest: true, billingMode: "private-test-reservation" }) }));
-    assert.equal(response.status, 403);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json() as { error: { code: string } }).error.code, "GENERATION_QUEUE_NOT_READY");
   }
 });
 

@@ -2,7 +2,7 @@ import { userEditInstruction } from "@/lib/domain/bare-shell";
 import { activeVerifiedIdentityPolicy } from "@/lib/server/wechat-auth-config-core";
 import { auditGenerationInputs } from "@/lib/server/machine-moderation";
 import { assertCurrentLegalConsent } from "@/lib/server/legal-consent";
-import { isOverseasImageModel } from "@/lib/domain/image-models";
+import { requirePublicModelOption } from "@/lib/server/public-model-option";
 import { attachActorCookie } from "@/lib/server/actor";
 import { getRuntimeRequestActor } from "@/lib/server/runtime-actor";
 import { ApiError, errorResponse, jsonResponse, requireJsonObject, requireString, readJsonBody } from "@/lib/server/api";
@@ -12,7 +12,7 @@ import { serializeJob } from "@/lib/server/serializers";
 import { assertCostBearingActor, assertPublicImageGenerationActor, assertDomesticGenerationParameters, assertGenerationRuntime, assertSameOriginMutation, assertDomesticGenerationQueueReady, validateDomesticInputAssetsForProvider } from "@/lib/server/runtime-policy";
 import { readAiEnvironment } from "@/lib/server/ai-environment";
 import type { ProviderPreference } from "@/lib/ai";
-import { isImageModel, imageModelSupportsQuality } from "@/lib/domain/image-models";
+import { imageModelSupportsQuality } from "@/lib/domain/image-models";
 import { generationBilling, quoteGenerationPrice, readGenerationPriceExpectation } from "@/lib/server/generation-pricing";
 import { readRuntimeBindings } from "@/lib/platform/cloudflare-runtime";
 import { assertPrivateTestRequest, resolvePrivateTestConfig } from "@/lib/server/private-test";
@@ -42,9 +42,10 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     const outputCount = body.outputCount;
     if (typeof outputCount !== "number" || !Number.isInteger(outputCount) || outputCount < 1 || outputCount > 4) throw new ApiError(400, "INVALID_FIELD", "outputCount 必须是1到4的整数。", { field: "outputCount" });
     const idempotencyKey = requireString(body.idempotencyKey, "idempotencyKey", { min: 8, max: 128 });
+    const hashInput = { previewId, selectedOutputAssetId, resolution, quality, outputCount, ...(body.optionId !== undefined ? { optionId: body.optionId, providerPreference: body.providerPreference } : {}) };
     const prior = await getJobByIdempotencyKey(actor.ownerId, idempotencyKey);
     if (prior) {
-      if (prior.requestHash !== await hashFinalize({ previewId, selectedOutputAssetId, resolution, quality, outputCount })) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "同一请求编号不能用于不同参数。");
+      if (prior.requestHash !== await hashFinalize(hashInput)) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "同一请求编号不能用于不同参数。");
       await assertQueuedJobItemsConsistent(prior);
       return attachActorCookie(jsonResponse({ job: serializeJob(prior, await getJobOutputs(prior.id, actor.ownerId)), persistence: getStorageMode(), idempotentReplay: true }, { status: 202, headers: storageHeaders() }), actor);
     }
@@ -53,11 +54,8 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
     if (!preview) throw new ApiError(404, "JOB_NOT_FOUND", "没有找到这个生成任务。");
     if (preview.purpose !== "preview") throw new ApiError(409, "INVALID_JOB_PURPOSE", "只有参考图任务可以生成成品图。");
     if (preview.status !== "SUCCEEDED" && preview.status !== "PARTIAL_SUCCEEDED") throw new ApiError(409, "JOB_NOT_READY", "参考图任务尚未成功完成。");
-    const providerPreference = preview.providerPreference;
-    if (isOverseasImageModel(providerPreference)) throw new ApiError(403, "OVERSEAS_MODEL_UNAVAILABLE", "海外模型暂不对公众开放。");
-    if (!isImageModel(providerPreference)) {
-      throw new ApiError(503, "PROVIDER_NOT_CONFIGURED", "该历史任务使用的图片模型已停用，不能继续生成成品图。请重新提交并选择国产模型。", { provider: preview.providerPreference });
-    }
+    const tuple = requirePublicModelOption({ optionId: body.optionId, modelId: body.providerPreference, resolution, quality });
+    const providerPreference = tuple.model;
     assertDomesticGenerationQueueReady(providerPreference as ProviderPreference, environment);
     assertPublicImageGenerationActor(actor, environment);
     if (!imageModelSupportsQuality(providerPreference, quality)) throw new ApiError(400, "PROVIDER_QUALITY_UNSUPPORTED", "当前模型不支持所选质量。");
@@ -86,7 +84,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
       providerAssets.push(asset);
     }
     await validateDomesticInputAssetsForProvider(providerPreference as ProviderPreference, providerAssets, getAssetBytes);
-    const price = quoteGenerationPrice({ modelId: providerPreference, purpose: "final", requestedResolution: resolution, inputImageCount: providerAssets.length, outputCount, quality, aspectRatio: preview.aspectRatio }, { production: true });
+    const price = quoteGenerationPrice({ optionId: body.optionId, modelId: providerPreference, purpose: "final", requestedResolution: resolution, inputImageCount: providerAssets.length, outputCount, quality, aspectRatio: preview.aspectRatio }, { production: true });
     const priceExpectation = readGenerationPriceExpectation(body);
     const now = new Date().toISOString();
     const moderation = await auditGenerationInputs(actor.ownerId, [preview.customPrompt,userEditInstruction(preview.editInstruction)].filter(Boolean).join("\n"), providerAssets, async asset => getAssetBytes(providerAssets.find(entry => entry.id === asset.id)!));
@@ -121,11 +119,11 @@ export async function POST(request: Request, context: RouteContext): Promise<Res
       outputCount,
       advancedSettingsJson: preview.advancedSettingsJson,
       idempotencyKey,
-      requestHash: await hashFinalize({ previewId, selectedOutputAssetId, resolution, quality, outputCount }),
+      requestHash: await hashFinalize(hashInput),
       createdAt: now,
       updatedAt: now,
     }, generationBilling(price), priceExpectation, { ...activeVerifiedIdentityPolicy(bindings), ...moderation });
-    if (!result.created && result.job.requestHash !== await hashFinalize({ previewId, selectedOutputAssetId, resolution, quality, outputCount })) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "同一个 idempotencyKey 不能用于不同的成品图请求。");
+    if (!result.created && result.job.requestHash !== await hashFinalize(hashInput)) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "同一个 idempotencyKey 不能用于不同的成品图请求。");
     await assertQueuedJobItemsConsistent(result.job);
     const response = jsonResponse({ job: serializeJob(result.job, result.created ? [] : await getJobOutputs(result.job.id, actor.ownerId)), persistence: getStorageMode(), idempotentReplay: !result.created }, { status: 202, headers: storageHeaders() });
     return attachActorCookie(response, actor);

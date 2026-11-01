@@ -1,3 +1,5 @@
+import { publicOptionForTuple } from "@/lib/domain/public-model-options";
+import { PUBLIC_MODEL_PRICE_VERSION, quoteGenerationPrice } from "./generation-pricing";
 import { userEditInstruction } from "@/lib/domain/bare-shell";
 import { createHash } from "node:crypto";
 
@@ -108,7 +110,13 @@ export async function createD1QueuedJobIdempotently(
   if (record.editInstruction?.startsWith("local-edit:v1:")) throw new ApiError(409, "LOCAL_EDIT_VERSION_RETIRED", "请刷新工作台后重新选择局部修改方式。");
   // Keep accepted historical requests replayable; retired workflows cannot create new work.
   if (record.workflowType === "floorplan") throw new ApiError(410, "WORKFLOW_RETIRED", "平面工作台已停用，请使用自助工作台。已有任务和图片仍可查看。");
-  if (isOverseasImageModel(record.providerPreference) && !(policy.allowPrivateTestOverseas && record.ownerId === PRIVATE_TEST_OWNER)) throw new ApiError(403, "OVERSEAS_MODEL_UNAVAILABLE", "海外模型暂不对公众开放。");
+  if (isOverseasImageModel(record.providerPreference) && !(policy.allowPrivateTestOverseas && record.ownerId === PRIVATE_TEST_OWNER)) {
+    const option = publicOptionForTuple(record.providerPreference, record.quality, record.resolution);
+    if (!option || record.effectiveResolution !== record.resolution || billing.priceVersion !== PUBLIC_MODEL_PRICE_VERSION) throw new ApiError(403, "OVERSEAS_MODEL_UNAVAILABLE", "请选择当前公开模型规格。");
+    const inputImageCount = [record.sourceAssetId, record.referenceAssetId, record.depthAssetId, record.normalAssetId, ...JSON.parse(record.additionalReferencesJson).map((entry: { assetId: string }) => entry.assetId)].filter(Boolean).length;
+    const quote = quoteGenerationPrice({ optionId: option.id, modelId: record.providerPreference, quality: record.quality, requestedResolution: record.resolution, purpose: record.purpose, inputImageCount, outputCount: record.outputCount, aspectRatio: record.aspectRatio }, { production: true });
+    if (quote.amountPerItem !== billing.amountPerItem) throw new ApiError(409, "PRICE_QUOTE_STALE", "积分报价已失效，请重新确认。");
+  }
   if (policy.requirePriceExpectation && !expectation) throw new ApiError(409, "PRICE_QUOTE_REQUIRED", "请先确认本次生成的最新积分价格。");
   if (expectation) assertGenerationPriceExpectation(billing, expectation, record.outputCount);
 

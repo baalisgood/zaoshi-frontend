@@ -6,7 +6,7 @@ import { GenerationView } from "@/components/studio/GenerationView";
 import {
   ImageUploadField,
   ImageModelSelect, OutputCounter,
-  QualityField, Segmented,
+  Segmented,
   usePrivateTestMode,
   type UploadedImage,
 } from "@/components/studio/StudioFields";
@@ -14,8 +14,10 @@ import { useGenerationJob } from "@/components/studio/useGenerationJob";
 import { PromptComposer } from "@/components/studio/PromptComposer";
 import { StudioTaskList } from "@/components/studio/StudioTaskList";
 import { useStudioParameterDraft } from "@/components/studio/useStudioParameterDraft";
+import { usePublicModelOption } from "./usePublicModelOption";
+import { getPublicModelOption, publicModelOptions } from "@/lib/domain/public-model-options";
 import { useGenerationPricing } from "@/components/studio/useGenerationPricing";
-import { imageModelMaxReferences, imageModelOptions, imageModelResolutionOptions, normalizeKnownImageModel, normalizeImageResolution, normalizeImageQuality, imageQualityLabel, restoreSelfServiceResolution, type ImageModel, type ImageQuality, type ImageResolution } from "@/lib/domain/image-models";
+import { imageModelMaxReferences, imageModelOptions, normalizeKnownImageModel, normalizeImageResolution, normalizeImageQuality, imageQualityLabel, restoreSelfServiceResolution, type ImageModel, type ImageQuality, type ImageResolution } from "@/lib/domain/image-models";
 import { createUploadAdmission, summarizeGenerationInputs } from "@/components/studio/input-limits";
 
 function nearestAspectRatio(image?: UploadedImage) {
@@ -49,7 +51,7 @@ export function finishReferenceRestore(slots: ReferenceSlot[], key: string, hasI
 
 export function SelfServiceStudio() {
   const privateTest = usePrivateTestMode();
-  const [provider, setProvider] = useState<ImageModel>("doubao-seedream-5-0-pro-260628");
+  const [provider, setProvider] = useState<ImageModel>("gpt-image-2.5-sunburst");
   const controller = useGenerationJob(privateTest);
   const [referenceSlots, setReferenceSlots] = useState<ReferenceSlot[]>([
     { key: "reference-slot-1", state: "idle" },
@@ -59,27 +61,31 @@ export function SelfServiceStudio() {
   const inputSummary = summarizeGenerationInputs(provider, { additionalReferences: references });
   admission.update(provider, inputSummary.count, 0, inputSummary.bytes, !inputSummary.allowed);
   const [prompt, setPrompt] = useState("");
-  const [quality, setQuality] = useState<ImageQuality>("auto");
+  const [quality, setQuality] = useState<ImageQuality>("medium");
   const [resolution, setResolution] = useState<ImageResolution>("2K");
+  const modelOption = usePublicModelOption(provider, resolution, quality, setProvider, setResolution, setQuality);
+  const optionResolutionChoices = publicModelOptions.find(option => option.id === modelOption.optionId)?.resolutions ?? [];
+  const selectedResolutionOptions = (["1K", "2K", "4K"] as const).map(value => ({ value, label: value, disabled: !(optionResolutionChoices as readonly string[]).includes(value) }));
   // eslint-disable-next-line react-hooks/set-state-in-effect -- reconcile unsupported selections after model changes.
   useEffect(() => { setResolution((current) => normalizeImageResolution(provider, current)); setQuality((current) => normalizeImageQuality(provider, current)); }, [provider]);
   const [outputCount, setOutputCount] = useState(1);
 
   const applyConfig = (config: Record<string, unknown>) => {
-    const nextProvider = normalizeKnownImageModel(config.providerPreference) ?? provider;
+    const restoredOption = modelOption.restore(config);
+    const nextProvider = restoredOption?.model ?? normalizeKnownImageModel(config.providerPreference) ?? provider;
     setProvider(nextProvider);
-    setResolution(restoreSelfServiceResolution(nextProvider, config));
-    setQuality(normalizeImageQuality(nextProvider, config.quality));
+    setResolution(restoredOption?.resolution ?? restoreSelfServiceResolution(nextProvider, config));
+    setQuality(restoredOption?.quality ?? normalizeImageQuality(nextProvider, config.quality));
     if (typeof config.outputCount === "number" && Number.isInteger(config.outputCount) && config.outputCount >= 1 && config.outputCount <= 4) setOutputCount(config.outputCount);
     if (typeof config.customPrompt === "string") setPrompt(config.customPrompt);
     const referenceCount = Array.isArray(config.referenceHints) ? config.referenceHints.reduce((sum, hint) => hint && typeof hint === "object" && (hint as { role?: unknown }).role === "reference" && Number.isInteger((hint as { count?: unknown }).count) ? sum + Number((hint as { count: number }).count) : sum, 0) : 0;
     if (typeof config.referenceSlotCount === "number" || referenceCount) { const count = typeof config.referenceSlotCount === "number" ? config.referenceSlotCount : referenceCount; setReferenceSlots((current) => Array.from({ length: Math.max(1, Math.min(14, count)) }, (_, index) => current[index] ?? { key: `reference-slot-${index + 1}`, state: "idle" })); }
   };
-  useStudioParameterDraft("self-service", { providerPreference: provider, resolution, quality, outputCount, customPrompt: prompt, referenceSlotCount: referenceSlots.length, referenceHints: references.length ? [{ role: "reference", count: references.length }] : [] }, applyConfig);
+  useStudioParameterDraft("self-service", { optionId: modelOption.optionId, providerPreference: provider, resolution, quality, outputCount, customPrompt: prompt, referenceSlotCount: referenceSlots.length, referenceHints: references.length ? [{ role: "reference", count: references.length }] : [] }, applyConfig);
 
   const aspectRatio = nearestAspectRatio(references[0]);
   const maxReferences = imageModelMaxReferences(provider, "final", false);
-  const pricing = useGenerationPricing({ modelId: provider, resolution, inputImageCount: references.length, outputCount, quality, aspectRatio });
+  const pricing = useGenerationPricing({ optionId: modelOption.ready ? modelOption.optionId : undefined, modelId: provider, resolution, inputImageCount: references.length, outputCount, quality, aspectRatio });
   const canGenerate = Boolean(prompt.trim()) && privateTest !== undefined && inputSummary.allowed &&
     !referenceSlots.some((slot) => slot.state === "uploading" || slot.state === "error") &&
     !controller.submitting;
@@ -92,7 +98,7 @@ export function SelfServiceStudio() {
       sourceAssetId: null,
       additionalReferences: references.map((image) => ({ assetId: image.id, role: "reference" as const })),
       customPrompt: prompt.trim(),
-      providerPreference: provider,
+      optionId: modelOption.optionId, providerPreference: provider,
       outputCount,
       resolution,
       aspectRatio,
@@ -144,10 +150,10 @@ export function SelfServiceStudio() {
                 <p>参考图将自动匹配最近的受支持画面比例。</p>
               </div>
             </div>
-            <div className="param-group"><h3 className="param-group-title">模型与画质</h3><div className="output-parameter-row"><div className="model-parameter"><ImageModelSelect value={provider} onChange={setProvider} /></div><QualityField model={provider} value={quality} onChange={setQuality} /></div><div className="output-parameter-row"><Segmented label="清晰度" disabledDescription="当前模型不支持的清晰度已禁用。" value={resolution} options={imageModelResolutionOptions(provider)} onChange={setResolution} /><Segmented label="画面比例" value={aspectRatio} options={["1:1", "4:3", "3:2", "16:9", "9:16"].map((value) => ({ value, label: value, disabled: true }))} onChange={() => undefined} description={`当前自动比例：${aspectRatio}；根据第一张参考图自动匹配，无参考图时使用4:3。`} disabledDescription="画面比例自动匹配，不可手动修改。" /></div>
+            <div className="param-group"><h3 className="param-group-title">模型与画质</h3><div className="output-parameter-row"><div className="model-parameter"><ImageModelSelect value={provider} optionId={modelOption.optionId} onOptionChange={modelOption.select} /></div></div><div className="output-parameter-row"><Segmented label="清晰度" disabledDescription="当前模型不支持的清晰度已禁用。" value={resolution} options={selectedResolutionOptions} onChange={setResolution} /><Segmented label="画面比例" value={aspectRatio} options={["1:1", "4:3", "3:2", "16:9", "9:16"].map((value) => ({ value, label: value, disabled: true }))} onChange={() => undefined} description={`当前自动比例：${aspectRatio}；根据第一张参考图自动匹配，无参考图时使用4:3。`} disabledDescription="画面比例自动匹配，不可手动修改。" /></div>
             </div><div className="param-group param-submit"><h3 className="param-group-title">输出与提交</h3><OutputCounter value={outputCount} onChange={setOutputCount} busy={controller.busy} />
             <div className="summary-card"><div className="summary-title"><span>任务摘要</span><small>{outputCount}张输出</small></div>
-            <dl className="task-summary"><div><dt>图像模型</dt><dd>{imageModelOptions.find((item) => item.value === provider)?.label}</dd></div>
+            <dl className="task-summary"><div><dt>图像模型</dt><dd>{getPublicModelOption(modelOption.optionId)?.label ?? imageModelOptions.find((item) => item.value === provider)?.label}</dd></div>
               <div><dt>参考图</dt><dd>{references.length ? `${references.length} 张` : "未上传"}</dd></div>
               <div><dt>画面比例</dt><dd>{aspectRatio}</dd></div>
               <div><dt>提示词</dt><dd>{prompt.trim() ? `${prompt.trim().length} 字` : "未填写"}</dd></div>
@@ -166,7 +172,7 @@ export function SelfServiceStudio() {
           <div className="results-heading">
             <div><span className="section-kicker">RESULTS</span><h2>生成结果</h2></div>
           </div>
-          <GenerationView controller={controller} resolution={resolution} quality={quality} />
+          <GenerationView optionId={modelOption.optionId} providerPreference={provider} controller={controller} resolution={resolution} quality={quality} />
           <StudioTaskList workflowType="self-service" refreshKey={controller.job?.id ?? ""} />
         </section>
       </div>

@@ -2,7 +2,7 @@ import { userEditInstruction } from "@/lib/domain/bare-shell";
 import { activeVerifiedIdentityPolicy } from "@/lib/server/wechat-auth-config-core";
 import { auditGenerationInputs } from "@/lib/server/machine-moderation";
 import { assertCurrentLegalConsent } from "@/lib/server/legal-consent";
-import { isOverseasImageModel } from "@/lib/domain/image-models";
+import { requirePublicModelOption } from "@/lib/server/public-model-option";
 import { readImageMetadata } from "@/lib/ai/image-metadata";
 import type { ImageMimeType } from "@/lib/ai/types";
 import { getStylePreset } from "@/lib/ai";
@@ -134,7 +134,7 @@ export async function POST(request: Request): Promise<Response> {
       await assertQueuedJobItemsConsistent(prior);
       return attachActorCookie(jsonResponse({ job: serializeJob(prior, await getJobOutputs(prior.id, actor.ownerId)), persistence: getStorageMode(), idempotentReplay: true }, { status: 202, headers: storageHeaders() }), actor);
     }
-    if (!privateTestMode && isOverseasImageModel(input.providerPreference)) throw new ApiError(403, "OVERSEAS_MODEL_UNAVAILABLE", "海外模型暂不对公众开放，请选择国内模型。");
+    if (!privateTestMode) requirePublicModelOption({ optionId: input.optionId, modelId: input.providerPreference, resolution: input.resolution, quality: input.quality });
     await assertCurrentLegalConsent(actor);
     if (privateTestMode) {
       await ensureDatabase();
@@ -194,7 +194,7 @@ export async function POST(request: Request): Promise<Response> {
       if (![baseSize.width, baseSize.height, markedSize.width, markedSize.height].every((value) => Number.isInteger(value) && Number(value) > 0) || baseSize.width !== markedSize.width || baseSize.height !== markedSize.height) throw new ApiError(400, "LOCAL_EDIT_DIMENSIONS", "标注图与局部编辑原图尺寸无效或不一致，请重新保存选区。");
     }
     const moderation = await auditGenerationInputs(actor.ownerId, [input.customPrompt, userEditInstruction(input.editInstruction)].filter(Boolean).join("\n"), providerAssets, async asset => getAssetBytes(providerAssets.find(entry => entry.id === asset.id)!));
-    const price = quoteGenerationPrice({ modelId: input.providerPreference, purpose: input.purpose, requestedResolution: input.resolution, inputImageCount: providerAssets.length, outputCount: input.outputCount, quality: input.quality, aspectRatio: input.aspectRatio }, privateTestMode && privateTest ? { privateTest: { config: privateTest, actor } } : { production: true });
+    const price = quoteGenerationPrice({ optionId: input.optionId, modelId: input.providerPreference, purpose: input.purpose, requestedResolution: input.resolution, inputImageCount: providerAssets.length, outputCount: input.outputCount, quality: input.quality, aspectRatio: input.aspectRatio }, privateTestMode && privateTest ? { privateTest: { config: privateTest, actor } } : { production: true });
     const priceExpectation = readGenerationPriceExpectation(rawBody);
     const billing = generationBilling(price);
 
